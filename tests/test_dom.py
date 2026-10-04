@@ -21,7 +21,7 @@ const {JSDOM} = require('jsdom');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const dom = new JSDOM(input.html, {url:'https://www.fastmoss.com/zh/e-commerce/sales-fixture', runScripts:'outside-only'});
 dom.window.HTMLElement.prototype.getClientRects = function() { return this.style.display === 'none' ? [] : [{}]; };
-process.stdout.write(dom.window.eval(input.script));'''
+Promise.resolve(dom.window.eval(input.script)).then(value => process.stdout.write(value)).catch(error => { console.error(error); process.exitCode=1; });'''
     result = subprocess.run([node, '-e', code], input=json.dumps({'html': html, 'script': script}), text=True, encoding='utf-8',
                             capture_output=True, env=env, timeout=15)
     if result.returncode and "Cannot find module 'jsdom'" in result.stderr:
@@ -61,3 +61,24 @@ def test_sales_board_link_discovery_rejects_detail_and_ambiguity():
     html = '<a href="/zh/e-commerce/sales-fixture">商品销量榜</a><a href="/zh/e-commerce/newProducts">新品榜</a><table><tr><td><a href="/zh/e-commerce/detail/123">销量榜</a></td></tr></table>'
     assert evaluate(html, SALES_BOARD_JS)['url'].endswith('/sales-fixture')
     assert not evaluate(html + '<a href="/zh/e-commerce/other">销量榜</a>', SALES_BOARD_JS)['url']
+
+
+def test_category_cell_tooltip_preserves_full_hierarchy():
+    html = '<table><thead><tr><th>商品</th><th>国家</th><th>品类</th><th>销量</th><th>店铺</th></tr></thead><tbody><tr><td>Toy</td><td>SG</td><td title="宠物用品 / 猫用品 / 猫砂盆、猫厕所">猫砂盆、猫厕所</td><td>20</td><td>Shop</td></tr></tbody></table>'
+    data = evaluate(html, PRODUCT_EXTRACT_JS)
+    assert data['rows'][0][2] == '猫砂盆、猫厕所'
+    assert data['product_metadata'][0]['category_paths'] == ['宠物用品 / 猫用品 / 猫砂盆、猫厕所']
+
+
+def test_category_tree_reads_real_component_options():
+    from fastmoss_auto.categories import CATEGORY_TREE_JS
+    script = "document.querySelector('span').__reactProps$fixture = {options:[{label:'宠物用品', value:1, children:[{label:'猫砂盆、猫厕所',value:2}]}]};\n" + CATEGORY_TREE_JS % json.dumps('宠物用品')
+    data = evaluate('<span>宠物用品</span>', script)
+    assert data['trees'][0][0]['children'][0]['label'] == '猫砂盆、猫厕所'
+
+
+def test_detail_category_evidence_excludes_navigation_and_product_title():
+    from fastmoss_auto.categories import DETAIL_CATEGORY_JS
+    html = '<nav class="category">美妆 / 猫砂盆、猫厕所</nav><h1>宠物用品 / 猫砂盆、猫厕所</h1><div class="goodsCategory">宠物用品 / 猫用品 / 猫砂盆、猫厕所</div>'
+    data = evaluate(html, DETAIL_CATEGORY_JS)
+    assert data['paths'] == ['宠物用品 / 猫用品 / 猫砂盆、猫厕所']

@@ -9,3 +9,4 @@ dist/
 data/
 .env
 ui-*.png
+.dom-tests/

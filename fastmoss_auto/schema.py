@@ -53,6 +53,60 @@ def category_matches(selected, actual):
     return bool(wanted and observed and observed[:len(wanted)] == wanted)
 
 
+def taxonomy_paths(nodes):
+    """Normalize nested and parent-ID category vocabularies; never infer by keywords."""
+    if not isinstance(nodes, list):
+        return []
+    records = []
+    def visit(items, ancestors=()):
+        for node in items:
+            if not isinstance(node, dict):
+                continue
+            label = next((str(node[k]).strip() for k in ('c_name', 'category_name', 'label', 'name', 'title')
+                          if node.get(k) is not None and str(node[k]).strip()), '')
+            identity = next((str(node[k]) for k in ('c_code', 'category_id', 'id', 'value', 'key') if node.get(k) is not None), '')
+            parent = next((str(node[k]) for k in ('parent_id', 'parentId', 'parent_code', 'c_parent_code', 'p_code', 'pid')
+                           if node.get(k) is not None), '')
+            path = (*ancestors, label) if label else ancestors
+            if label:
+                records.append((identity, parent, path))
+            for key in ('children', 'child', 'sub_categories', 'categories'):
+                if isinstance(node.get(key), list):
+                    visit(node[key], path)
+    visit(nodes)
+    by_id = {}
+    for identity, parent, path in records:
+        if identity:
+            by_id.setdefault(identity, []).append((parent, path))
+    def expand(parent, path, visited):
+        if len(path) > 1 or not parent or parent in ('0', '-1'):
+            return [path]
+        if parent in visited or len(by_id.get(parent, [])) != 1:
+            return []
+        pp, prefix = by_id[parent][0]
+        return [(*ancestor, *path) for ancestor in expand(pp, prefix, visited | {parent})]
+    return list(dict.fromkeys(expanded for _, parent, path in records
+                             for expanded in expand(parent, path, set())))
+
+
+def resolve_category(selected, actual, paths=(), trees=()):
+    """A leaf alone is acceptable only with an unambiguous source hierarchy."""
+    raw = category_path(actual)
+    if category_matches(selected, actual):
+        return str(actual).strip()
+    if not raw or len(raw) > 1:
+        return None
+    candidates = {tuple(category_path(path)) for path in paths if isinstance(path, str)}
+    for tree in trees:
+        candidates.update(tuple(category_path(' / '.join(path))) for path in taxonomy_paths(tree))
+    candidates = {path for path in candidates if len(path) > 1 and path[-1:] == tuple(raw)}
+    # Ambiguous labels under different parents are not proof of membership.
+    if len(candidates) != 1:
+        return None
+    full = next(iter(candidates))
+    return ' / '.join(full) if category_matches(selected, ' / '.join(full)) else None
+
+
 def parse_product(headers, cells, evidence, fallback):
     """Use names instead of column positions when a product header exists."""
     names = [re.sub(r'\s+', '', h).casefold() for h in headers]
@@ -144,6 +198,7 @@ PRODUCT_EXTRACT_JS = r"""
  const evidence = [];
  const metadata = [];
  const productIndex = main.headers.findIndex(h => /^(商品|商品信息|商品名称|商品标题|产品|product(?:\s*(?:info|name))?)$/i.test(h.trim()));
+ const categoryIndex = main.headers.findIndex(h => /^(品类|商品品类|商品分类|类目|商品类目|所属类目|category)$/i.test(h.trim()));
  const rows = main.rs.map(r => {
    const cells = Array.from(r.cells);
    const cell = countryIndex >= 0 ? cells[countryIndex] : null;
@@ -170,10 +225,13 @@ PRODUCT_EXTRACT_JS = r"""
    const img = imgs.find(i => !/flag|country|icon|avatar|logo/i.test([i.alt,i.className,i.src].join(' ')) &&
                      (i.naturalWidth >= 40 || i.width >= 40 || i.getAttribute('data-src'))) || null;
    const productUrl = anchor ? absolute(anchor.getAttribute('href')) : '';
+   const categoryCell = cells[categoryIndex >= 0 ? categoryIndex : 4];
+   const categoryPaths = categoryCell ? [categoryCell, ...categoryCell.querySelectorAll('[title],[aria-label],[data-category-path]')]
+      .flatMap(e => ['title','aria-label','data-category-path'].map(key => e.getAttribute(key)).filter(Boolean)) : [];
    const imageTitle = img && img.alt && !/^(image|product|商品|图片)$/i.test(img.alt.trim()) ? img.alt.trim() : '';
    const title = (anchor ? (anchor.title || anchor.getAttribute('aria-label') || imageTitle ||
                   (anchor.innerText || anchor.textContent || '').split('\n')[0]) : imageTitle).trim();
-   metadata.push({product_title:title, product_url:productUrl,
+   metadata.push({product_title:title, product_url:productUrl, category_paths:categoryPaths,
       product_id: (productUrl.match(/\/(?:detail|product)\/(\d+)/) || [])[1] || '',
       main_image_url:img ? absolute(img.getAttribute('data-src') || img.currentSrc || img.src) : ''});
    return cells.map(e => (e.innerText || e.textContent || '').trim());

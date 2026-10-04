@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag (for example v0.1.3)
+        description: Release tag (for example v0.1.4)
         required: true
-        default: v0.1.3
+        default: v0.1.4
 permissions:
   contents: read
 concurrency:
@@ -86,7 +86,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ inputs.version || 'v0.1.3' }}
+      VERSION: ${{ inputs.version || 'v0.1.4' }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4

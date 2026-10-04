@@ -4,7 +4,8 @@ import re
 from threading import Event
 from .bridge import Bridge
 from .domain import Cancelled, load_sections
-from .schema import PRODUCT_EXTRACT_JS, parse_product, canonical_country, country_tokens, category_matches
+from .schema import PRODUCT_EXTRACT_JS, parse_product, canonical_country, country_tokens, resolve_category, category_path
+from .categories import CATEGORY_TREE_JS, DETAIL_CATEGORY_JS
 
 # Exact visible text; never treat a substring match or mere click as proof.
 FILTER_JS = r"""
@@ -67,9 +68,10 @@ NEXT_JS = """(() => {
 
 
 class Collector:
-    def __init__(self, bridge=None, sections=None):
+    def __init__(self, bridge=None, sections=None, detail_bridge_factory=None):
         self.bridge = bridge
         self.sections = sections
+        self.detail_bridge_factory = detail_bridge_factory
 
     def collect(self, job, cancel=None, progress=lambda *args: None):
         job.validate()
@@ -95,6 +97,38 @@ class Collector:
                     raise RuntimeError(f"无法确认筛选已生效：{label}。请检查页面标签、账号权限，或清空可选筛选后重试。")
 
         rows, signatures, warnings = [], set(), []
+        category_trees = None
+        detail_bridge = None
+        detail_paths = {}
+
+        def verify_detail(product_url, actual_category):
+            nonlocal detail_bridge
+            from urllib.parse import urlsplit
+            parsed_url = urlsplit(product_url)
+            if parsed_url.hostname != 'www.fastmoss.com' or not re.fullmatch(r'/zh/e-commerce/detail/\d+/?', parsed_url.path):
+                return []
+            if product_url in detail_paths:
+                return detail_paths[product_url]
+            if not detail_bridge:
+                if self.detail_bridge_factory:
+                    detail_bridge = self.detail_bridge_factory()
+                elif self.bridge is None:
+                    detail_bridge = Bridge(job.bsk, cancel)
+                else:
+                    return []
+                detail_bridge.start()
+            # A separate owned session keeps the sales board's filters and pagination intact.
+            detail_bridge.navigate(product_url)
+            wait()
+            evidence = detail_bridge.evaluate(DETAIL_CATEGORY_JS)
+            if urlsplit(evidence.get('url', '')).path.rstrip('/') != parsed_url.path.rstrip('/'):
+                raise RuntimeError('商品详情发生跳转，无法验证类目归属')
+            paths = evidence.get('paths', [])
+            # Do not cache a loading shell: the next retry must read fresh evidence.
+            leaf = category_path(actual_category)
+            if any(len(category_path(path)) > 1 and category_path(path)[-1:] == leaf for path in paths):
+                detail_paths[product_url] = paths
+            return paths
         try:
             progress(0, "连接 BrowserSkill")
             if job.period:
@@ -167,11 +201,27 @@ class Collector:
                             else:
                                 mismatch = "商品行国家缺少可验证信息，不能保证精确国家范围"
                                 break
-                            if not category_matches(job.category, row.get("category", "")):
-                                mismatch = f"第{index + 1}页类目不一致或缺失：所选={job.category}；读取={row.get('category', '')!r}"
-                                break
-                            row["category_verification"] = "row_and_page_filter"
                             info = metadata[row_index] if row_index < len(metadata) else {}
+                            actual_category = row.get('category', '')
+                            paths = info.get('category_paths', [])
+                            resolved = resolve_category(job.category, actual_category, paths)
+                            if not resolved and actual_category:
+                                if category_trees is None:
+                                    progress(int(index / job.pages * 90), '读取真实类目层级，核对末级类目归属')
+                                    hierarchy = bridge.evaluate(CATEGORY_TREE_JS % json.dumps(category_labels[0], ensure_ascii=False))
+                                    category_trees = hierarchy.get('trees', [])
+                                resolved = resolve_category(job.category, actual_category, paths, category_trees)
+                            if not resolved and len(category_path(actual_category)) == 1 and info.get('product_url'):
+                                progress(int(index / job.pages * 90), f'通过商品详情核对类目层级：{actual_category}')
+                                paths = verify_detail(info['product_url'], actual_category)
+                                resolved = resolve_category(job.category, actual_category, paths)
+                            if not resolved:
+                                mismatch = f"第{index + 1}页类目不一致或无法确认层级：所选={job.category}；读取={actual_category!r}"
+                                break
+                            row['category_raw'] = actual_category
+                            row['category_path'] = resolved
+                            row["category_verification"] = ('row_and_page_filter' if resolved == str(actual_category).strip()
+                                                            else 'source_hierarchy_and_page_filter')
                             row.update({key: info.get(key, '') for key in ('product_title', 'product_url', 'product_id', 'main_image_url')})
                             row['product_title'] = row['product_title'] or row.get('product_name', '')
                             row['product_name'] = row['product_title']
@@ -226,6 +276,11 @@ class Collector:
                         warnings.append(f'{count} 条商品未展示可提取的{caption}；保留空值，未生成猜测链接。')
             return rows, warnings
         finally:
+            if detail_bridge:
+                try:
+                    detail_bridge.close()
+                except Exception as exc:
+                    progress(90, f'清理详情验证会话失败：{exc}')
             try:
                 bridge.close()
             except Exception as exc:
