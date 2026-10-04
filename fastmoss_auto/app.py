@@ -394,4 +394,9 @@ def main():
     application.setApplicationName("FastMoss Auto")
     window = Window()
     window.show()
-    sys.exit(application.exec())
+    if "--smoke-test" in sys.argv:
+        window.show_rows([{ "product_name": "Smoke test", "sales_period": "100" }])
+        QTimer.singleShot(500, application.quit)
+    code = application.exec()
+    window.close()
+    sys.exit(code)
