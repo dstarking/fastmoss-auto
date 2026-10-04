@@ -26,6 +26,10 @@ class Job:
     def validate(self):
         if not self.country.strip():
             raise ValueError("请选择国家")
+        if self.period:
+            raise ValueError("周期 --time 仅适用于上游达人榜，商品和店铺请留空")
+        if self.section == "shops" and self.category:
+            raise ValueError("上游店铺榜不支持品类参数，请留空或使用商品分析")
         if self.section not in ("products", "shops"):
             raise ValueError("只支持商品和店铺榜单")
         if self.section == "shops" and self.ranking not in ("sales", "hot"):

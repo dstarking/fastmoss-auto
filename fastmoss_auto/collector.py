@@ -3,6 +3,7 @@ import json
 from threading import Event
 from .bridge import Bridge
 from .domain import Cancelled, load_sections
+from .schema import PRODUCT_EXTRACT_JS, parse_product, canonical_country, country_tokens
 
 # Exact visible text; never treat a substring match or mere click as proof.
 FILTER_JS = r"""
@@ -65,7 +66,8 @@ class Collector:
         sections = self.sections or load_sections(job.source)
         cfg = sections[job.section]
         bridge = self.bridge or Bridge(job.bsk, cancel)
-        filters = [job.country, "跨境店"] + ([job.category] if job.category else []) + ([job.period] if job.period else [])
+        country_label = canonical_country(job.country) or job.country
+        filters = [country_label, "跨境店"] + ([job.category] if job.category else []) + ([job.period] if job.period else [])
 
         def wait():
             if cancel.wait(job.wait):
@@ -80,6 +82,10 @@ class Collector:
         rows, signatures, warnings = [], set(), []
         try:
             progress(0, "连接 BrowserSkill")
+            if job.period:
+                raise ValueError("上游商品/店铺榜不支持 --time；周期仅适用于达人榜，请清空周期")
+            if job.section == "shops" and job.category:
+                raise ValueError("上游店铺榜不支持 --category；请在商品分析中按品类筛选")
             bridge.start()
             url = cfg["url"] if job.section == "products" else cfg["rankings"][job.ranking]
             bridge.navigate(url)
@@ -97,21 +103,64 @@ class Collector:
                 if guard.get("blocked") or not guard.get("table"):
                     raise RuntimeError("页面未就绪或需要登录/验证，请在浏览器处理后重试")
                 check_filters()
-                data = bridge.evaluate(cfg["extract_js"])
+                extract = PRODUCT_EXTRACT_JS if job.section == "products" and cfg.get("parse_kind") == "fixed" else cfg["extract_js"]
+                data = bridge.evaluate(extract)
+                parsed = []
+                for attempt in range(4):
+                    parsed = []
+                    mismatch = "表格仍在加载" if data.get("loading") else None
+                    current_signature = json.dumps(data.get("rows", []), ensure_ascii=False, sort_keys=True)
+                    if current_signature in signatures:
+                        mismatch = "分页内容重复，等待页面刷新"
+                    headers = data.get("headers", [])
+                    hints = data.get("country_evidence", [])
+                    for row_index, cell in enumerate(data.get("rows", [])):
+                        hint = hints[row_index] if row_index < len(hints) else ""
+                        row = (parse_product(headers, cell, hint, cfg["parse_row"])
+                               if job.section == "products" and cfg.get("parse_kind") == "fixed"
+                               else cfg["parse_row"](cell) if job.section == "products"
+                               else cfg["parse_row"](headers, cell))
+                        if not row:
+                            continue
+                        if job.section == "products":
+                            raw = row.get("country_raw", row.get("country", ""))
+                            evidence = row.get("country_evidence", "")
+                            observed = country_tokens(raw) | country_tokens(evidence)
+                            wanted = canonical_country(job.country) or job.country
+                            if observed and observed != {wanted}:
+                                mismatch = f"第{index + 1}页国家不一致：所选={job.country}；读取={raw!r}；图标信息={evidence!r}；识别={sorted(observed)}"
+                                break
+                            if str(raw).strip() and not observed:
+                                mismatch = f"国家字段无法识别：所选={job.country}；读取={raw!r}；表头={headers}。可能是列结构变化，请核对上游版本。"
+                                break
+                            if observed:
+                                row["country_raw"] = raw
+                                row["country"] = wanted
+                                row["country_verification"] = "row_and_page_filter"
+                            else:
+                                row["country"] = ""
+                                row["country_verification"] = "page_filter_only"
+                                warning = "商品行未显示可识别国家，国家范围依据已确认的页面筛选；原始空值保留，未伪造行国家。"
+                                if warning not in warnings:
+                                    warnings.append(warning)
+                        parsed.append({**row, "page": index + 1, "filter_country": country_label,
+                                       "filter_shop_type": "跨境店", "filter_category": job.category,
+                                       "filter_period": ""})
+                    if not parsed and not mismatch:
+                        mismatch = "当前页没有可解析数据，等待加载"
+                    if not mismatch:
+                        break
+                    if attempt == 3:
+                        raise RuntimeError(mismatch + "；刷新重试后仍不一致，已停止导出")
+                    progress(int(index / job.pages * 90), mismatch + "；等待页面刷新后重试")
+                    wait()
+                    check_filters()
+                    data = bridge.evaluate(extract)
                 cells = data.get("rows", [])
                 signature = json.dumps(cells, ensure_ascii=False, sort_keys=True)
                 if signature in signatures:
                     raise RuntimeError("分页内容重复，页面可能未刷新；已停止，未导出可疑结果")
                 signatures.add(signature)
-                parsed = []
-                for cell in cells:
-                    row = cfg["parse_row"](cell) if job.section == "products" else cfg["parse_row"](data.get("headers", []), cell)
-                    if row:
-                        if job.section == "products" and row.get("country", "").strip() != job.country:
-                            raise RuntimeError("数据中的国家与所选国家不一致，已停止导出")
-                        parsed.append({**row, "page": index + 1, "filter_country": job.country,
-                                       "filter_shop_type": "跨境店", "filter_category": job.category,
-                                       "filter_period": job.period})
                 if not parsed:
                     raise RuntimeError("当前页没有可解析数据；请检查会员权限、筛选结果或上游解析器版本")
                 rows.extend(parsed)

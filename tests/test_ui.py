@@ -73,3 +73,16 @@ def test_sidebar_empty_states_and_data_isolation():
     assert window.creator_table.rowCount() == 1
     assert window.metrics['creators'].text() == '1'
     window.close()
+
+
+def test_parameters_follow_upstream_capabilities():
+    app = QApplication.instance() or QApplication([])
+    window = Window()
+    window.navigation.setCurrentRow(1)
+    assert window.category.isEnabled()
+    assert not window.period.isEnabled()
+    window.navigation.setCurrentRow(2)
+    assert not window.category.isEnabled()
+    assert window.job().category == ''
+    assert window.job().period == ''
+    window.close()

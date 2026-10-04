@@ -86,7 +86,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.1  ·  本地数据分析")
+        version = QLabel("v0.1.2  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)
@@ -123,7 +123,9 @@ class Window(QMainWindow):
         self.period = QComboBox()
         self.period.setEditable(True)
         self.period.addItems(["", "日榜", "周榜", "月榜"])
-        self.period.setCurrentText(self.settings.value("period", ""))
+        self.period.setCurrentText("")
+        self.period.setEnabled(False)
+        self.period.setToolTip("上游 --time 仅适用于达人榜；商品/店铺榜未支持")
         self.pages = QSpinBox()
         self.pages.setRange(1, 100)
         self.pages.setValue(int(self.settings.value("pages", 3)))
@@ -137,7 +139,7 @@ class Window(QMainWindow):
         form.addRow("国家（必选）", self.country)
         form.addRow("采集榜单", self.section)
         form.addRow("品类（可选）", self.category)
-        form.addRow("周期（可选）", self.period)
+        form.addRow("周期（此榜单不支持）", self.period)
         form.addRow("最多采集页数", self.pages)
         form.addRow("页面等待", self.wait)
         form.addRow("输出目录", self.output_row)
@@ -239,7 +241,15 @@ class Window(QMainWindow):
             combo.currentTextChanged.connect(self.save_settings)
         self.pages.valueChanged.connect(self.save_settings)
         self.wait.valueChanged.connect(self.save_settings)
+        self.section.currentIndexChanged.connect(self.sync_parameters)
+        self.sync_parameters()
         self.update_chart([])
+
+    def sync_parameters(self, *_):
+        products = self.section.currentData() == "products"
+        self.category.setEnabled(products)
+        self.category.setToolTip("商品榜支持品类；上游店铺榜只支持国家，品类不会传入")
+        self.period.setCurrentText("")
 
     def path_row(self, edit, title, directory):
         widget = QWidget()
@@ -266,7 +276,7 @@ class Window(QMainWindow):
     def job(self):
         section, _, ranking = self.section.currentData().partition(":")
         return Job(country=self.country.currentText().strip(), section=section, ranking=ranking or "sales",
-                   category=self.category.text().strip(), period=self.period.currentText().strip(),
+                   category=self.category.text().strip() if section == "products" else "", period="",
                    pages=self.pages.value(), wait=self.wait.value(), output=self.output.text().strip(),
                    source=self.source.text().strip(), bsk=self.bsk.text().strip())
 
@@ -448,7 +458,7 @@ class Window(QMainWindow):
         self.market_empty = QLabel("开始你的市场分析")
         self.market_empty.setStyleSheet("font-size:18px;font-weight:700;border:0")
         info.addWidget(self.market_empty)
-        self.market_note = QLabel("尚未采集或导入数据。\n\n1. 在设置中配置 BrowserSkill 和上游仓库目录。\n2. 在商品或店铺分析中选择国家、品类及输出目录，开始采集。\n3. 采集完成后查看表格、销量图与报告。")
+        self.market_note = QLabel("尚未采集或导入数据。\n\n1. 在设置中配置 BrowserSkill 和上游仓库目录。\n2. 在商品或店铺分析中选择国家、可用参数及输出目录，开始采集。\n3. 采集完成后查看表格、销量图与报告。")
         self.market_note.setWordWrap(True)
         info.addWidget(self.market_note)
         actions = QHBoxLayout()

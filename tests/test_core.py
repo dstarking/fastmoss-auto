@@ -46,12 +46,12 @@ def collect(job, fake):
 
 def test_combined_filter_and_pagination(job):
     fake = FakeBridge()
-    rows, warnings = collect(replace(job, period='周榜'), fake)
+    rows, warnings = collect(job, fake)
     assert [r['product_name'] for r in rows] == ['A', 'B']
     assert rows[1]['page'] == 2
     assert all(r['filter_shop_type'] == '跨境店' for r in rows)
-    assert len(fake.filters) == 4
-    assert all(label in ''.join(fake.filters) for label in ['新加坡', '跨境店', '宠物用品', '周榜'])
+    assert len(fake.filters) == 3
+    assert all(label in ''.join(fake.filters) for label in ['新加坡', '跨境店', '宠物用品'])
     assert fake.closed and not warnings
 
 @pytest.mark.parametrize('failure', ['missing', 'unselected', 'login'])
