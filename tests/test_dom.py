@@ -22,7 +22,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const dom = new JSDOM(input.html, {url:'https://www.fastmoss.com/zh/e-commerce/sales-fixture', runScripts:'outside-only'});
 dom.window.HTMLElement.prototype.getClientRects = function() { return this.style.display === 'none' ? [] : [{}]; };
 process.stdout.write(dom.window.eval(input.script));'''
-    result = subprocess.run([node, '-e', code], input=json.dumps({'html': html, 'script': script}), text=True,
+    result = subprocess.run([node, '-e', code], input=json.dumps({'html': html, 'script': script}), text=True, encoding='utf-8',
                             capture_output=True, env=env, timeout=15)
     if result.returncode and "Cannot find module 'jsdom'" in result.stderr:
         pytest.skip('Install jsdom@26.1.0 in .dom-tests for DOM fixtures')

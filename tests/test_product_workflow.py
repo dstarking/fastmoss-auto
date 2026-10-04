@@ -78,7 +78,7 @@ def test_image_export_and_bestsellers(tmp_path, monkeypatch):
             {'product_name': 'B', 'sales_period': '2k', 'main_image_url': 'https://example.com/p.png'},
             {'product_name': 'C', 'sales_period': '10-200'}, {'product_name': 'D', 'total_sales': '90000'}]
     run = export_run(Job(output=str(tmp_path)), rows)
-    data = json.loads((run / 'data.json').read_text())
+    data = json.loads((run / 'data.json').read_text(encoding='utf-8'))
     assert len(calls) == 1
     assert (run / data['rows'][0]['main_image_file']).read_bytes().startswith(b'\x89PNG')
     with (run / 'bestsellers.csv').open(encoding='utf-8-sig', newline='') as f:
@@ -91,7 +91,7 @@ def test_image_failure_is_explicit(tmp_path, monkeypatch):
     def fail(*args): raise OSError('expired')
     monkeypatch.setattr('fastmoss_auto.export.download_image', fail)
     run = export_run(Job(output=str(tmp_path)), [{'product_name': 'A', 'main_image_url': 'https://example.com/p.png'}])
-    data = json.loads((run / 'data.json').read_text())
+    data = json.loads((run / 'data.json').read_text(encoding='utf-8'))
     assert data['rows'][0]['main_image_file'] == ''
     assert '下载失败' in data['warnings'][0]
     assert data['rows'][0]['main_image_url'] == 'https://example.com/p.png'

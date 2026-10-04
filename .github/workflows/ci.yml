@@ -21,4 +21,9 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install -e ".[dev]"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install DOM test dependencies
+        run: npm install --prefix .dom-tests jsdom@26.1.0 --no-audit --no-fund
       - run: python -m pytest -q

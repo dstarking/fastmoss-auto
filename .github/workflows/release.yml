@@ -38,7 +38,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --prefix .dom-tests jsdom@26.1.0 --no-audit --no-fund
+      - name: Install DOM test dependencies
+        run: npm install --prefix .dom-tests jsdom@26.1.0 --no-audit --no-fund
       - run: python -m pytest -q
       - name: Build Windows EXE
         if: runner.os == 'Windows'
