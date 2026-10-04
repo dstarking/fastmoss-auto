@@ -1,0 +1,31 @@
+name: Verify released Windows native UI
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/windows-ui.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-ui:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      QT_QPA_PLATFORM: windows
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download released EXE
+        run: gh release download v0.1.1 --pattern FastMossAuto-Windows-x64.exe --dir release-check
+      - name: Verify native window rendering
+        shell: pwsh
+        run: |
+          $process = Start-Process release-check/FastMossAuto-Windows-x64.exe -ArgumentList "--smoke-test", "--capture-ui" -PassThru
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "Native window timed out" }
+          if ($process.ExitCode -ne 0) { throw "Native UI check failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-native-UI
+          path: ui-*.png
+          if-no-files-found: error
+          retention-days: 7
