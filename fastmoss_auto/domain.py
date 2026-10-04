@@ -32,6 +32,8 @@ class Job:
             raise ValueError("上游店铺榜不支持品类参数，请留空或使用商品分析")
         if self.section not in ("products", "shops"):
             raise ValueError("只支持商品和店铺榜单")
+        if self.section == "products" and (not self.category.strip() or self.ranking != "sales"):
+            raise ValueError("商品分析必须指定品类，并使用销量榜")
         if self.section == "shops" and self.ranking not in ("sales", "hot"):
             raise ValueError("店铺榜单无效")
         if not 1 <= self.pages <= 100:

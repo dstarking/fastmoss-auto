@@ -1,9 +1,10 @@
 """Combined filters, selected-state checks, stable pagination, cancellation."""
 import json
+import re
 from threading import Event
 from .bridge import Bridge
 from .domain import Cancelled, load_sections
-from .schema import PRODUCT_EXTRACT_JS, parse_product, canonical_country, country_tokens
+from .schema import PRODUCT_EXTRACT_JS, parse_product, canonical_country, country_tokens, category_matches
 
 # Exact visible text; never treat a substring match or mere click as proof.
 FILTER_JS = r"""
@@ -13,7 +14,7 @@ FILTER_JS = r"""
   const radios = Array.from(document.querySelectorAll('input[type=radio]'));
   const radio = radios.find(e => {
     const p = e.closest('label') || e.parentElement;
-    return p && visible(p) && text(p) === label;
+    return p && !p.closest('table,nav,aside') && visible(p) && text(p) === label;
   });
   if (radio) {
     if (action === 'click' && !radio.checked) radio.click();
@@ -25,7 +26,7 @@ FILTER_JS = r"""
     if (expand) expand.click();
   }
   const candidates = Array.from(document.querySelectorAll('button,a,span,li,label,div'))
-    .filter(e => visible(e) && text(e) === label)
+    .filter(e => visible(e) && !e.closest('table,nav,aside') && text(e) === label)
     .sort((a,b) => a.querySelectorAll('*').length - b.querySelectorAll('*').length);
   const el = candidates[0];
   if (!el) return JSON.stringify({found:false,selected:false});
@@ -34,12 +35,22 @@ FILTER_JS = r"""
     e.getAttribute('aria-checked') === 'true' ||
     /(^|[\s_-])(active|selected|checked)([\s_-]|$)/i.test(e.className || '')
   );
-  const selected = () => active(el) || active(el.parentElement) ||
+  const selected = () => active(el) || (text(el.parentElement) === label && active(el.parentElement)) ||
     !!el.querySelector('input:checked');
   if (action === 'click' && !selected()) el.click();
   return JSON.stringify({found:true,selected:!!selected(),kind:'label'});
 })(%s, %s)
 """
+
+# Resolve the real navigation link; do not invent a sales URL or reuse newProducts.
+SALES_BOARD_JS = r"""(() => {
+ const links = Array.from(document.querySelectorAll('a[href]')).filter(a =>
+   /^(商品销量榜|销量榜|商品销量|热销商品榜)$/.test((a.innerText || a.textContent || '').trim()) &&
+   a.getClientRects().length && !a.closest('table') &&
+   /\/e-commerce\//.test(a.href) && !/\/detail\/|\/newProducts(?:[/?#]|$)/.test(a.href));
+ const urls = [...new Set(links.map(a => a.href))];
+ return JSON.stringify({url:urls.length === 1 ? urls[0] : '', candidates:urls});
+})()"""
 
 GUARD_JS = """(() => JSON.stringify({url: location.href, title: document.title,
  blocked: /登录后|请登录|验证码|访问过于频繁|Access denied|Verify you are human/i.test(document.body.innerText),
@@ -67,14 +78,18 @@ class Collector:
         cfg = sections[job.section]
         bridge = self.bridge or Bridge(job.bsk, cancel)
         country_label = canonical_country(job.country) or job.country
-        filters = [country_label, "跨境店"] + ([job.category] if job.category else []) + ([job.period] if job.period else [])
+        category_labels = [part.strip() for part in re.split(r'\s*(?:/|>|›|→|\\|－|-)\s*', job.category) if part.strip()]
+        filters = [country_label, "跨境店"] + (category_labels if job.category else [])
+        # Parent category choices may collapse after selecting a leaf; verify the leaf
+        # control and the full path in every product row.
+        checked_filters = [country_label, "跨境店"] + (category_labels[-1:] if job.category else [])
 
         def wait():
             if cancel.wait(job.wait):
                 raise Cancelled("任务已取消；未导出未完成的数据")
 
         def check_filters():
-            for label in filters:
+            for label in checked_filters:
                 state = bridge.evaluate(FILTER_JS % (json.dumps(label, ensure_ascii=False), '"check"'))
                 if not state.get("found") or not state.get("selected"):
                     raise RuntimeError(f"无法确认筛选已生效：{label}。请检查页面标签、账号权限，或清空可选筛选后重试。")
@@ -90,6 +105,13 @@ class Collector:
             url = cfg["url"] if job.section == "products" else cfg["rankings"][job.ranking]
             bridge.navigate(url)
             wait()
+            if job.section == "products":
+                sales = bridge.evaluate(SALES_BOARD_JS)
+                if not sales.get("url"):
+                    raise RuntimeError("无法定位唯一的商品销量榜入口；请检查 FastMoss 中文导航和账号权限。不会用新品榜代替销量榜。")
+                url = sales["url"]
+                bridge.navigate(url)
+                wait()
             for label in filters:
                 state = bridge.evaluate(FILTER_JS % (json.dumps(label, ensure_ascii=False), '"click"'))
                 if not state.get("found"):
@@ -102,6 +124,10 @@ class Collector:
                 guard = bridge.evaluate(GUARD_JS)
                 if guard.get("blocked") or not guard.get("table"):
                     raise RuntimeError("页面未就绪或需要登录/验证，请在浏览器处理后重试")
+                if job.section == "products" and guard.get("url"):
+                    from urllib.parse import urlsplit
+                    if urlsplit(guard["url"]).path.rstrip('/') != urlsplit(url).path.rstrip('/'):
+                        raise RuntimeError("页面已离开商品销量榜；停止采集")
                 check_filters()
                 extract = PRODUCT_EXTRACT_JS if job.section == "products" and cfg.get("parse_kind") == "fixed" else cfg["extract_js"]
                 data = bridge.evaluate(extract)
@@ -114,6 +140,7 @@ class Collector:
                         mismatch = "分页内容重复，等待页面刷新"
                     headers = data.get("headers", [])
                     hints = data.get("country_evidence", [])
+                    metadata = data.get("product_metadata", [])
                     for row_index, cell in enumerate(data.get("rows", [])):
                         hint = hints[row_index] if row_index < len(hints) else ""
                         row = (parse_product(headers, cell, hint, cfg["parse_row"])
@@ -138,11 +165,18 @@ class Collector:
                                 row["country"] = wanted
                                 row["country_verification"] = "row_and_page_filter"
                             else:
-                                row["country"] = ""
-                                row["country_verification"] = "page_filter_only"
-                                warning = "商品行未显示可识别国家，国家范围依据已确认的页面筛选；原始空值保留，未伪造行国家。"
-                                if warning not in warnings:
-                                    warnings.append(warning)
+                                mismatch = "商品行国家缺少可验证信息，不能保证精确国家范围"
+                                break
+                            if not category_matches(job.category, row.get("category", "")):
+                                mismatch = f"第{index + 1}页类目不一致或缺失：所选={job.category}；读取={row.get('category', '')!r}"
+                                break
+                            row["category_verification"] = "row_and_page_filter"
+                            info = metadata[row_index] if row_index < len(metadata) else {}
+                            row.update({key: info.get(key, '') for key in ('product_title', 'product_url', 'product_id', 'main_image_url')})
+                            row['product_title'] = row['product_title'] or row.get('product_name', '')
+                            row['product_name'] = row['product_title']
+                            row['source_url'] = url
+                            row['ranking'] = 'sales'
                         parsed.append({**row, "page": index + 1, "filter_country": country_label,
                                        "filter_shop_type": "跨境店", "filter_category": job.category,
                                        "filter_period": ""})
@@ -176,6 +210,20 @@ class Collector:
                         raise RuntimeError("点击下一页后页码未变化，请增加页面等待时间")
             if cancel.is_set():
                 raise Cancelled("任务已取消")
+            if job.section == 'products':
+                unique, seen = [], set()
+                for row in rows:
+                    identity = row.get('product_id') or row.get('product_url')
+                    if identity and identity in seen:
+                        continue
+                    if identity:
+                        seen.add(identity)
+                    unique.append(row)
+                rows = unique
+                for key, caption in [('product_url', '商品详情链接'), ('main_image_url', '主图链接')]:
+                    count = sum(not row.get(key) for row in rows)
+                    if count:
+                        warnings.append(f'{count} 条商品未展示可提取的{caption}；保留空值，未生成猜测链接。')
             return rows, warnings
         finally:
             try:

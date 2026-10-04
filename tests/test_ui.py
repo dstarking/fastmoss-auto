@@ -86,3 +86,19 @@ def test_parameters_follow_upstream_capabilities():
     assert window.job().category == ''
     assert window.job().period == ''
     window.close()
+
+
+def test_product_completion_keeps_product_scope(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    window = Window()
+    window.navigation.setCurrentRow(1)
+    assert window.section.count() == 1 and window.job().section == 'products'
+    rows = [{'product_name': 'Cat toy', 'shop_name': 'Pet shop', '店铺': 'Pet shop', 'sales_period': '200'}]
+    assert window.row_kind(rows) == 'products'
+    window.navigation.setCurrentRow(2)
+    assert all(window.section.itemData(i).startswith('shops:') for i in range(window.section.count()))
+    window.collection_done((tmp_path, rows, [], 'products'))
+    assert window.navigation.currentRow() == 1
+    assert window.table.item(0, 0).text() == 'Cat toy'
+    assert window.rows_by_section['products'] == rows and not window.rows_by_section['shops']
+    window.close()

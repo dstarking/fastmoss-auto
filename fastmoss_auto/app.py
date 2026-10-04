@@ -86,7 +86,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.2  ·  本地数据分析")
+        version = QLabel("v0.1.3  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)
@@ -115,11 +115,9 @@ class Window(QMainWindow):
         self.country.addItems(COUNTRIES)
         self.country.setCurrentText(self.settings.value("country", "新加坡"))
         self.section = QComboBox()
-        self.section.addItem("商品 · 新品榜", "products")
-        self.section.addItem("店铺 · 销量榜", "shops:sales")
-        self.section.addItem("店铺 · 热推榜", "shops:hot")
+        self.section.addItem("商品 · 销量榜", "products")
         self.category = QLineEdit(self.settings.value("category", "宠物用品"))
-        self.category.setPlaceholderText("可选，填写 FastMoss 中文页面的完整标签；留空沿用页面默认")
+        self.category.setPlaceholderText("必填；完整类目标签或路径，例如 宠物用品 / 宠物玩具")
         self.period = QComboBox()
         self.period.setEditable(True)
         self.period.addItems(["", "日榜", "周榜", "月榜"])
@@ -138,13 +136,13 @@ class Window(QMainWindow):
         form.addRow("平台 / 店铺类型", QLabel("TikTok Shop / 跨境店（固定）"))
         form.addRow("国家（必选）", self.country)
         form.addRow("采集榜单", self.section)
-        form.addRow("品类（可选）", self.category)
+        form.addRow("商品品类（必选）", self.category)
         form.addRow("周期（此榜单不支持）", self.period)
         form.addRow("最多采集页数", self.pages)
         form.addRow("页面等待", self.wait)
         form.addRow("输出目录", self.output_row)
         hint = QLabel("请使用 FastMoss 中文页面。国家列表是候选标签，实际可用性以页面和账号权限为准。\n"
-                      "任一已填写的筛选无法确认生效时会停止任务；商品榜来自上游的新品榜。")
+                      "商品按国家＋跨境店＋必选类目采集销量榜，逐条验证范围；图片下载失败时保留URL并提示。")
         hint.setWordWrap(True)
         form.addRow(hint)
         buttons = QWidget()
@@ -248,7 +246,7 @@ class Window(QMainWindow):
     def sync_parameters(self, *_):
         products = self.section.currentData() == "products"
         self.category.setEnabled(products)
-        self.category.setToolTip("商品榜支持品类；上游店铺榜只支持国家，品类不会传入")
+        self.category.setToolTip("按层级选择类目，并逐条验证实际类目；店铺榜不传品类")
         self.period.setCurrentText("")
 
     def path_row(self, edit, title, directory):
@@ -328,19 +326,21 @@ class Window(QMainWindow):
             if self.cancel.is_set():
                 raise Cancelled("任务已取消")
             progress(95, "保存 CSV、JSON 和报告")
-            run = export_run(job, rows, warnings)
-            return run, rows, warnings
+            run = export_run(job, rows, warnings, self.cancel, progress)
+            saved = json.loads((run / 'data.json').read_text(encoding='utf-8'))
+            rows, warnings = saved['rows'], saved['warnings']
+            return run, rows, warnings, job.section
         self.run_work(collect, self.collection_done)
 
     def collection_done(self, result):
-        run, rows, warnings = result
+        run, rows, warnings, kind = result
         self.last_run = run
         self.progress.setValue(100)
         self.log.appendPlainText(f"已保存 {len(rows)} 条数据到 {run}")
         for warning in warnings:
             self.log.appendPlainText(warning)
-        self.show_rows(rows)
-        self.navigation.setCurrentRow(1 if "product_name" in rows[0] else 2)
+        self.show_rows(rows, kind)
+        self.navigation.setCurrentRow(1 if kind == "products" else 2)
         self.tabs.setCurrentIndex(1)
 
     def check_environment(self):
@@ -392,8 +392,10 @@ class Window(QMainWindow):
             rows = data.get("rows")
             if not isinstance(rows, list) or not rows or not all(isinstance(row, dict) for row in rows):
                 raise ValueError("不是有效的 FastMoss data.json")
-            kind = self.row_kind(rows)
-            self.show_rows(rows)
+            kind = data.get("filters", {}).get("section") or self.row_kind(rows)
+            if kind not in self.rows_by_section:
+                raise ValueError("未知历史任务类型")
+            self.show_rows(rows, kind)
             self.last_run = Path(filename).parent
             self.navigation.setCurrentRow({"products": 1, "shops": 2, "creators": 3}[kind])
             self.tabs.setCurrentIndex(1)
@@ -403,12 +405,14 @@ class Window(QMainWindow):
     @staticmethod
     def row_kind(rows):
         keys = {key for row in rows for key in row}
+        if {"product_name", "product_title", "product_url", "商品", "商品信息"} & keys:
+            return "products"
         if "creator_name" in keys or "达人" in keys or "达人信息" in keys:
             return "creators"
         return "shops" if "shop_name" in keys or "店铺" in keys else "products"
 
-    def show_rows(self, rows):
-        kind = self.row_kind(rows)
+    def show_rows(self, rows, kind=None):
+        kind = kind or self.row_kind(rows)
         self.rows_by_section[kind] = rows
         self.refresh_market()
         if kind == "creators":
@@ -516,10 +520,17 @@ class Window(QMainWindow):
         self.subtitle.setText(descriptions[index])
         if index in (1, 2):
             kind = "products" if index == 1 else "shops"
+            selected = self.section.currentData()
+            self.section.blockSignals(True)
+            self.section.clear()
             if index == 1:
-                self.section.setCurrentIndex(0)
-            elif self.section.currentIndex() == 0:
-                self.section.setCurrentIndex(1)
+                self.section.addItem("商品 · 销量榜", "products")
+            else:
+                self.section.addItem("店铺 · 销量榜", "shops:sales")
+                self.section.addItem("店铺 · 热推榜", "shops:hot")
+                self.section.setCurrentIndex(1 if selected == "shops:hot" else 0)
+            self.section.blockSignals(False)
+            self.sync_parameters()
             self.result_empty.setText(f"暂无{'商品' if index == 1 else '店铺'}数据。请开始采集，或导入历史 data.json。")
             self.render_rows(self.rows_by_section[kind])
 

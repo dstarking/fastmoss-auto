@@ -5,7 +5,7 @@ from threading import Event
 from types import SimpleNamespace
 import pytest
 from fastmoss_auto.bridge import Bridge
-from fastmoss_auto.collector import Collector, GUARD_JS, NEXT_JS, PAGE_JS
+from fastmoss_auto.collector import Collector, GUARD_JS, NEXT_JS, PAGE_JS, SALES_BOARD_JS
 from fastmoss_auto.domain import Job, Cancelled, load_sections
 from fastmoss_auto.export import export_run, numeric_sales
 
@@ -25,7 +25,8 @@ class FakeBridge:
     def start(self): pass
     def navigate(self, url): self.url = url
     def evaluate(self, js):
-        if js == 'extract': return {'rows': self.pages[self.index], 'headers': ['商品', '国家']}
+        if js == SALES_BOARD_JS: return {'url': 'https://www.fastmoss.com/zh/e-commerce/verified-sales-board'}
+        if js == 'extract': return {'rows': self.pages[self.index], 'headers': ['商品', '国家'], 'product_metadata': [{'product_url': 'https://www.fastmoss.com/zh/e-commerce/detail/' + str(self.index * 100 + i), 'main_image_url': 'https://example.com/toy.png'} for i, _ in enumerate(self.pages[self.index])]}
         if js == GUARD_JS: return {'table': True, 'blocked': self.failure == 'login'}
         if js == NEXT_JS:
             if self.index + 1 >= len(self.pages): return {'clicked': False}
@@ -37,7 +38,7 @@ class FakeBridge:
     def close(self): self.closed = True
 
 SECTIONS = {'products': {'url': 'https://www.fastmoss.com/zh/e-commerce/newProducts',
-    'extract_js': 'extract', 'parse_row': lambda c: {'product_name': c[0], 'country': c[1]}},
+    'extract_js': 'extract', 'parse_row': lambda c: {'product_name': c[0], 'country': c[1], 'category': '宠物用品'}},
     'shops': {'rankings': {'sales': 'https://www.fastmoss.com/zh/shop-marketing/tiktok'},
     'extract_js': 'extract', 'parse_row': lambda headers, c: {'shop_name': c[0]}}}
 

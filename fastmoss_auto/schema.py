@@ -42,17 +42,28 @@ def canonical_country(value):
     return next(iter(found)) if len(found) == 1 else None
 
 
+def category_path(value):
+    """Compare complete hierarchy segments, never title substrings."""
+    return [re.sub(r'\s+', '', part).casefold() for part in
+            re.split(r'\s*(?:/|>|›|→|\n|\\|－|-)\s*', str(value or '').strip()) if part.strip()]
+
+
+def category_matches(selected, actual):
+    wanted, observed = category_path(selected), category_path(actual)
+    return bool(wanted and observed and observed[:len(wanted)] == wanted)
+
+
 def parse_product(headers, cells, evidence, fallback):
     """Use names instead of column positions when a product header exists."""
     names = [re.sub(r'\s+', '', h).casefold() for h in headers]
     aliases = {
         'rank': ('排名', '序号', 'rank'),
-        'product_name': ('商品', '商品信息', '商品名称', '产品', 'product', 'productinfo', 'productname'),
+        'product_name': ('商品', '商品信息', '商品名称', '商品标题', '产品', 'product', 'productinfo', 'productname'),
         'country': ('国家', '国家/地区', '国家地区', '所属国家', 'country', 'country/region'),
         'shop': ('店铺', '所属店铺', '关联店铺', '店铺信息', 'shop', 'shopinfo'),
-        'category': ('品类', '商品品类', '商品分类', '类目', 'category'),
+        'category': ('品类', '商品品类', '商品分类', '类目', '商品类目', '所属类目', 'category'),
         'commission': ('佣金', '佣金比例', '佣金率', 'commission'),
-        'sales_period': ('销量', '周期销量', 'sales', '近7天销量', '近30天销量'),
+        'sales_period': ('销量', '周期销量', '商品销量', 'sales', '近7天销量', '近28天销量', '近30天销量', '昨日销量'),
         'gmv_period': ('销售额', '周期销售额', 'gmv', '近7天销售额', '近30天销售额'),
         'total_sales': ('总销量', '累计销量', 'totalsales'),
         'total_gmv': ('总销售额', '累计销售额', 'totalgmv'),
@@ -88,6 +99,7 @@ def parse_product(headers, cells, evidence, fallback):
             row['listed_at'] = re.split('[：:]', line)[-1].strip()
     row['country_raw'] = row['country']
     row['country_evidence'] = evidence
+    row['sales_metric'] = headers[indexes['sales_period']] if indexes['sales_period'] is not None else ''
     return row
 
 
@@ -130,6 +142,8 @@ PRODUCT_EXTRACT_JS = r"""
  const headerIndex = main.headers.findIndex(h => /^(国家(?:\s*\/\s*地区)?|国家地区|所属国家|country(?:\s*\/\s*region)?)$/i.test(h.trim()));
  const countryIndex = main.headers.length ? headerIndex : 2;
  const evidence = [];
+ const metadata = [];
+ const productIndex = main.headers.findIndex(h => /^(商品|商品信息|商品名称|商品标题|产品|product(?:\s*(?:info|name))?)$/i.test(h.trim()));
  const rows = main.rs.map(r => {
    const cells = Array.from(r.cells);
    const cell = countryIndex >= 0 ? cells[countryIndex] : null;
@@ -147,10 +161,25 @@ PRODUCT_EXTRACT_JS = r"""
      }
    }
    evidence.push(hints.join('\n'));
+   const productCell = cells[productIndex >= 0 ? productIndex : 1];
+   const anchors = productCell ? Array.from(productCell.querySelectorAll('a[href]')) : [];
+   const anchor = anchors.find(a => /\/e-commerce\/detail\//.test(a.href)) ||
+                  anchors.find(a => /\/view\/product\//.test(a.href));
+   const absolute = value => { try { const u = new URL(value, location.href); return /^https?:$/.test(u.protocol) ? u.href : ''; } catch(e) { return ''; } };
+   const imgs = productCell ? Array.from(productCell.querySelectorAll('img')) : [];
+   const img = imgs.find(i => !/flag|country|icon|avatar|logo/i.test([i.alt,i.className,i.src].join(' ')) &&
+                     (i.naturalWidth >= 40 || i.width >= 40 || i.getAttribute('data-src'))) || null;
+   const productUrl = anchor ? absolute(anchor.getAttribute('href')) : '';
+   const imageTitle = img && img.alt && !/^(image|product|商品|图片)$/i.test(img.alt.trim()) ? img.alt.trim() : '';
+   const title = (anchor ? (anchor.title || anchor.getAttribute('aria-label') || imageTitle ||
+                  (anchor.innerText || anchor.textContent || '').split('\n')[0]) : imageTitle).trim();
+   metadata.push({product_title:title, product_url:productUrl,
+      product_id: (productUrl.match(/\/(?:detail|product)\/(\d+)/) || [])[1] || '',
+      main_image_url:img ? absolute(img.getAttribute('data-src') || img.currentSrc || img.src) : ''});
    return cells.map(e => (e.innerText || e.textContent || '').trim());
  });
  const wrapper = main.table.closest('.ant-table-wrapper') || main.table.parentElement;
  const loading = !!Array.from(wrapper.querySelectorAll('.ant-spin-spinning')).find(e => e.getClientRects().length);
- return JSON.stringify({headers:main.headers,rows,country_evidence:evidence,loading,title:document.title});
+ return JSON.stringify({headers:main.headers,rows,country_evidence:evidence,product_metadata:metadata,loading,title:document.title});
 })()
 """

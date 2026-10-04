@@ -39,13 +39,10 @@ def test_collector_accepts_country_alias(raw, tmp_path):
     assert rows[0]['country_raw'] == raw
     assert rows[0]['country_verification'] == 'row_and_page_filter'
 
-def test_blank_country_keeps_provenance(tmp_path):
+def test_blank_country_rejected_in_precise_mode(tmp_path):
     fake = FakeBridge(pages=[[['Toy', '']]])
-    rows, warnings = Collector(fake, SECTIONS).collect(Job(output=str(tmp_path), pages=1), ImmediateEvent())
-    assert rows[0]['country'] == ''
-    assert rows[0]['filter_country'] == '新加坡'
-    assert rows[0]['country_verification'] == 'page_filter_only'
-    assert warnings
+    with pytest.raises(RuntimeError, match='国家缺少'):
+        Collector(fake, SECTIONS).collect(Job(output=str(tmp_path), pages=1), ImmediateEvent())
 
 def test_stale_country_retries_then_recovers(tmp_path):
     class Stale(FakeBridge):
@@ -74,8 +71,8 @@ def test_collector_header_and_flag_integration(tmp_path):
     class HeaderBridge(FakeBridge):
         def evaluate(self, js):
             if js == PRODUCT_EXTRACT_JS:
-                return {'headers': ['', '商品', '店铺', '国家/地区', '销量'],
-                        'rows': [['', 'Toy', 'Shop', '', '100']], 'country_evidence': ['SG']}
+                return {'headers': ['', '商品', '店铺', '国家/地区', '销量', '品类'],
+                        'rows': [['', 'Toy', 'Shop', '', '100', '宠物用品']], 'country_evidence': ['SG'], 'product_metadata': [{'product_url': 'https://www.fastmoss.com/zh/e-commerce/detail/1', 'main_image_url': 'https://example.com/p.png'}]}
             return super().evaluate(js)
     rows, warnings = Collector(HeaderBridge(), cfg).collect(Job(output=str(tmp_path), pages=1), ImmediateEvent())
     assert rows[0]['country'] == '新加坡'
