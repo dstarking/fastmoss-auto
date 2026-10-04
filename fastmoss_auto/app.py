@@ -89,7 +89,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.5  ·  本地数据分析")
+        version = QLabel("v0.1.6  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)

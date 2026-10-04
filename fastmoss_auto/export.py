@@ -93,7 +93,7 @@ def download_image(url, run):
     parts = urlsplit(url)
     if parts.scheme not in ('http', 'https') or not parts.hostname:
         raise ValueError('不是公开图片URL')
-    request = Request(url, headers={'User-Agent': 'FastMossAuto/0.1.5'})
+    request = Request(url, headers={'User-Agent': 'FastMossAuto/0.1.6'})
     with urlopen(request, timeout=5) as response:
         data = response.read(10 * 1024 * 1024 + 1)
     if len(data) > 10 * 1024 * 1024:

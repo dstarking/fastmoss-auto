@@ -52,6 +52,7 @@ class CategoryPicker(QWidget):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget():
+                item.widget().hide()
                 item.widget().deleteLater()
         self.combos = []
         depth = max(3, max((len(path) for path in self.paths), default=1))

@@ -94,3 +94,16 @@ def test_read_button_snapshots_configuration_and_uses_worker(tmp_path, monkeypat
     assert seen['args'][0:3] == ('新加坡','source','C:/tools/bsk.exe')
     assert window.category.text() == '宠物用品'
     window.close()
+
+
+def test_refresh_hides_old_controls_immediately():
+    application = app()
+    picker = CategoryPicker('宠物用品')
+    picker.set_paths(PATHS)
+    picker.show()
+    application.processEvents()
+    old_holder = picker.combos[0].parentWidget()
+    assert old_holder.isVisible()
+    picker.set_paths(PATHS)
+    assert not old_holder.isVisible()  # no event-loop/deferred-delete wait needed
+    picker.close()
