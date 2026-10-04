@@ -8,3 +8,4 @@ dist/
 *.spec
 data/
 .env
+ui-*.png

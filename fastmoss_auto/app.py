@@ -6,13 +6,15 @@ from threading import Event
 
 from PySide6.QtCore import (QObject, Signal, QRunnable, QThreadPool, QSettings,
                             Qt, QUrl, QProcess, QTimer)
-from PySide6.QtGui import QDesktopServices, QPainter
+from PySide6.QtGui import QDesktopServices, QPainter, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
     QHBoxLayout, QFormLayout, QLineEdit, QPushButton, QComboBox, QSpinBox,
     QDoubleSpinBox, QFileDialog, QLabel, QTabWidget, QPlainTextEdit, QProgressBar,
-    QTableWidget, QTableWidgetItem, QMessageBox, QSplitter, QHeaderView)
+    QTableWidget, QTableWidgetItem, QMessageBox, QSplitter, QHeaderView,
+    QListWidget, QStackedWidget, QScrollArea)
 from PySide6.QtCharts import QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis
 
+from .theme import apply_theme, STYLE
 from .bridge import Bridge
 from .collector import Collector
 from .domain import Job, Cancelled, COUNTRIES, default_output, load_sections
@@ -47,7 +49,10 @@ class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FastMoss Auto · TikTok 跨境选品")
-        self.resize(1220, 820)
+        apply_theme(QApplication.instance())
+        self.resize(1280, 860)
+        self.setMinimumSize(1000, 720)
+        self.rows_by_section = {"products": [], "shops": [], "creators": []}
         self.settings = QSettings("FastMossAuto", "Desktop")
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(1)
@@ -62,14 +67,46 @@ class Window(QMainWindow):
         self.daemon.finished.connect(lambda code, status: self.log.appendPlainText(f"本应用启动的服务已退出（{code}）"))
 
         root = QWidget()
-        layout = QVBoxLayout(root)
-        title = QLabel("FastMoss Auto")
-        title.setStyleSheet("font-size:26px;font-weight:700;color:#183153")
-        layout.addWidget(title)
-        layout.addWidget(QLabel("TikTok Shop · 跨境店 ｜ 复用 Chrome / Edge 登录态 ｜ CSV / JSON / 报告"))
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        shell = QHBoxLayout(root)
+        shell.setContentsMargins(0, 0, 0, 0)
+        shell.setSpacing(0)
+        sidebar = QWidget()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(220)
+        side = QVBoxLayout(sidebar)
+        side.setContentsMargins(18, 28, 18, 22)
+        brand = QLabel("FastMoss\n数据助手")
+        brand.setObjectName("brand")
+        side.addWidget(brand)
+        note = QLabel("TikTok Shop · 跨境店")
+        note.setObjectName("sidebarNote")
+        side.addWidget(note)
+        side.addSpacing(25)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("navigation")
+        self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
+        side.addWidget(self.navigation)
+        version = QLabel("v0.1.1  ·  本地数据分析")
+        version.setObjectName("sidebarNote")
+        side.addWidget(version)
+        shell.addWidget(sidebar)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(12)
+        self.page_title = QLabel("市场分析")
+        self.page_title.setObjectName("pageTitle")
+        self.subtitle = QLabel("从采集结果开始，查看当前市场的数据概况")
+        self.subtitle.setObjectName("subtitle")
+        layout.addWidget(self.page_title)
+        layout.addWidget(self.subtitle)
+        self.stack = QStackedWidget()
+        layout.addWidget(self.stack, 1)
+        shell.addWidget(content, 1)
         self.setCentralWidget(root)
+        self.build_market_page()
+        self.tabs = QTabWidget()
+        self.stack.addWidget(self.tabs)
 
         collect = QWidget()
         form = QFormLayout(collect)
@@ -111,6 +148,7 @@ class Window(QMainWindow):
         buttons = QWidget()
         row = QHBoxLayout(buttons)
         self.start_btn = QPushButton("开始采集")
+        self.start_btn.setObjectName("primary")
         self.stop_btn = QPushButton("取消任务")
         self.stop_btn.setEnabled(False)
         self.open_btn = QPushButton("打开输出目录")
@@ -122,8 +160,13 @@ class Window(QMainWindow):
         self.open_btn.clicked.connect(self.open_output)
         form.addRow(buttons)
         self.progress = QProgressBar()
+        self.progress.setValue(0)
         form.addRow(self.progress)
-        self.tabs.addTab(collect, "采集任务")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(collect)
+        self.tabs.addTab(scroll, "采集设置")
 
         result = QWidget()
         results = QVBoxLayout(result)
@@ -144,7 +187,11 @@ class Window(QMainWindow):
         splitter.addWidget(self.table)
         splitter.addWidget(self.chart)
         results.addWidget(splitter)
-        self.tabs.addTab(result, "数据与图表")
+        self.result_empty = QLabel("暂无商品数据。完成采集后自动展示，或点击右上角导入历史 data.json。")
+        self.result_empty.setWordWrap(True)
+        results.insertWidget(1, self.result_empty)
+        self.tabs.addTab(result, "数据结果")
+        self.build_creator_page()
 
         setup = QWidget()
         setup_form = QFormLayout(setup)
@@ -167,18 +214,25 @@ class Window(QMainWindow):
         guide = QLabel("1. 安装 BrowserSkill CLI 和 Chrome / Edge 扩展。\n"
                        "2. 选择已有 fastmoss-rpa-skills 的目录。\n"
                        "3. 连接扩展，在浏览器登录 FastMoss，使用中文页面。\n"
-                       "4. 检查环境后，返回采集任务选择国家、可选参数和输出目录。\n\n"
+                       "4. 检查环境后，进入商品或店铺分析选择国家、可选参数和输出目录。\n\n"
                        "设置自动保存；输出目录支持中文和空格，每次任务生成独立子文件夹。\n"
                        "本程序调用你本地的上游 sections.py，不随包复制上游源码。")
         guide.setWordWrap(True)
         setup_form.addRow(guide)
-        self.tabs.addTab(setup, "环境设置")
+        setup_scroll = QScrollArea()
+        setup_scroll.setWidgetResizable(True)
+        setup_scroll.setWidget(setup)
+        self.stack.addWidget(setup_scroll)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(1000)
         self.log.setMaximumHeight(155)
+        layout.addWidget(QLabel("任务日志"))
+        self.log.setPlaceholderText("操作提示、采集进度和环境检查结果会显示在这里。")
         layout.addWidget(self.log)
-        self.setStyleSheet("QMainWindow{background:#f4f7fb} QPushButton{padding:8px 16px} QLineEdit,QComboBox,QSpinBox,QDoubleSpinBox{padding:5px} QTabWidget::pane{background:white;border:1px solid #dce3ed}")
+        self.setStyleSheet(STYLE)
+        self.navigation.currentRowChanged.connect(self.navigate)
+        self.navigation.setCurrentRow(0)
         for field in (self.output, self.source, self.bsk, self.category):
             field.editingFinished.connect(self.save_settings)
         for combo in (self.country, self.period):
@@ -276,6 +330,7 @@ class Window(QMainWindow):
         for warning in warnings:
             self.log.appendPlainText(warning)
         self.show_rows(rows)
+        self.navigation.setCurrentRow(1 if "product_name" in rows[0] else 2)
         self.tabs.setCurrentIndex(1)
 
     def check_environment(self):
@@ -327,26 +382,142 @@ class Window(QMainWindow):
             rows = data.get("rows")
             if not isinstance(rows, list) or not rows or not all(isinstance(row, dict) for row in rows):
                 raise ValueError("不是有效的 FastMoss data.json")
+            kind = self.row_kind(rows)
             self.show_rows(rows)
             self.last_run = Path(filename).parent
+            self.navigation.setCurrentRow({"products": 1, "shops": 2, "creators": 3}[kind])
             self.tabs.setCurrentIndex(1)
         except Exception as exc:
             self.on_error(str(exc))
 
+    @staticmethod
+    def row_kind(rows):
+        keys = {key for row in rows for key in row}
+        if "creator_name" in keys or "达人" in keys or "达人信息" in keys:
+            return "creators"
+        return "shops" if "shop_name" in keys or "店铺" in keys else "products"
+
     def show_rows(self, rows):
+        kind = self.row_kind(rows)
+        self.rows_by_section[kind] = rows
+        self.refresh_market()
+        if kind == "creators":
+            self.fill_table(self.creator_table, rows)
+            self.creator_empty.setText(f"已导入 {len(rows)} 条达人记录。")
+        else:
+            self.render_rows(rows)
+
+    @staticmethod
+    def fill_table(table, rows):
         fields = list(dict.fromkeys(key for row in rows for key in row))
-        self.table.clear()
-        self.table.setColumnCount(len(fields))
-        self.table.setRowCount(len(rows))
-        self.table.setHorizontalHeaderLabels(fields)
+        table.clear()
+        table.setColumnCount(len(fields))
+        table.setRowCount(len(rows))
+        table.setHorizontalHeaderLabels(fields)
         for i, row in enumerate(rows):
             for j, key in enumerate(fields):
-                self.table.setItem(i, j, QTableWidgetItem(str(row.get(key, ""))))
+                table.setItem(i, j, QTableWidgetItem(str(row.get(key, ""))))
+
+    def render_rows(self, rows):
+        self.fill_table(self.table, rows)
         self.summary.setText(f"共 {len(rows)} 条数据 · 图表仅使用可解析的明确销量值")
+        self.result_empty.setVisible(not rows)
         self.update_chart(rows)
+
+    def build_market_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        metrics = QHBoxLayout()
+        self.metrics = {}
+        for key, caption in [("products", "商品记录"), ("shops", "店铺记录"), ("creators", "达人记录")]:
+            card = QWidget()
+            card.setObjectName("card")
+            box = QVBoxLayout(card)
+            box.setContentsMargins(20, 16, 20, 16)
+            box.addWidget(QLabel(caption))
+            value = QLabel("0")
+            value.setObjectName("metric")
+            box.addWidget(value)
+            self.metrics[key] = value
+            metrics.addWidget(card)
+        layout.addLayout(metrics)
+        welcome = QWidget()
+        welcome.setObjectName("card")
+        info = QVBoxLayout(welcome)
+        info.setContentsMargins(24, 24, 24, 24)
+        self.market_empty = QLabel("开始你的市场分析")
+        self.market_empty.setStyleSheet("font-size:18px;font-weight:700;border:0")
+        info.addWidget(self.market_empty)
+        self.market_note = QLabel("尚未采集或导入数据。\n\n1. 在设置中配置 BrowserSkill 和上游仓库目录。\n2. 在商品或店铺分析中选择国家、品类及输出目录，开始采集。\n3. 采集完成后查看表格、销量图与报告。")
+        self.market_note.setWordWrap(True)
+        info.addWidget(self.market_note)
+        actions = QHBoxLayout()
+        setup = QPushButton("前往设置")
+        setup.clicked.connect(lambda: self.navigation.setCurrentRow(4))
+        collect = QPushButton("开始商品分析")
+        collect.setObjectName("primary")
+        collect.clicked.connect(lambda: self.navigation.setCurrentRow(1))
+        history = QPushButton("导入历史数据")
+        history.clicked.connect(self.import_run)
+        actions.addWidget(setup)
+        actions.addWidget(collect)
+        actions.addWidget(history)
+        actions.addStretch()
+        info.addLayout(actions)
+        layout.addWidget(welcome)
+        notice = QLabel("统计基于本次采集或导入的记录，不代表全市场规模；没有历史快照时不计算增长率。")
+        notice.setObjectName("muted")
+        notice.setWordWrap(True)
+        layout.addWidget(notice)
+        layout.addStretch()
+        self.stack.addWidget(page)
+
+    def build_creator_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.creator_empty = QLabel("暂无达人数据。可以导入包含 creator_name 或达人字段的历史 data.json。\n"
+            "当前直接采集支持商品和店铺；达人榜无法确认跨境店筛选，因此此页提供导入与查看。")
+        self.creator_empty.setWordWrap(True)
+        layout.addWidget(self.creator_empty)
+        history = QPushButton("导入达人数据")
+        history.clicked.connect(self.import_run)
+        layout.addWidget(history, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.creator_table = QTableWidget()
+        self.creator_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.creator_table)
+        self.stack.addWidget(page)
+
+    def refresh_market(self):
+        for key, metric in self.metrics.items():
+            metric.setText(str(len(self.rows_by_section[key])))
+        rows = [row for items in self.rows_by_section.values() for row in items]
+        if rows:
+            countries = sorted({str(row.get("filter_country") or row.get("country") or "未标注") for row in rows})
+            self.market_empty.setText("当前数据概况")
+            self.market_note.setText(f"已加载 {len(rows)} 条记录。\n国家 / 地区：{'、'.join(countries)}\n可在左侧切换商品、店铺或达人分析，查看各自的数据。")
+
+    def navigate(self, index):
+        if index < 0:
+            return
+        names = ["市场分析", "商品分析", "店铺分析", "达人分析", "设置"]
+        self.page_title.setText(names[index])
+        self.stack.setCurrentIndex([0, 1, 1, 2, 3][index])
+        descriptions = ["查看当前采集或导入的数据概况", "选择商品采集条件，查看商品结果与销量图", "选择店铺榜单，查看店铺结果与销量图", "导入并查看达人历史数据", "连接浏览器，配置本地采集环境"]
+        self.subtitle.setText(descriptions[index])
+        if index in (1, 2):
+            kind = "products" if index == 1 else "shops"
+            if index == 1:
+                self.section.setCurrentIndex(0)
+            elif self.section.currentIndex() == 0:
+                self.section.setCurrentIndex(1)
+            self.result_empty.setText(f"暂无{'商品' if index == 1 else '店铺'}数据。请开始采集，或导入历史 data.json。")
+            self.render_rows(self.rows_by_section[kind])
 
     def update_chart(self, rows):
         chart = QChart()
+        chart.setTheme(QChart.ChartTheme.ChartThemeLight)
+        chart.setBackgroundBrush(QColor("#ffffff"))
+        chart.setTitleBrush(QColor("#243248"))
         chart.setTitle("销量 Top 10（当前榜单周期；区间和币种值不参与）")
         values = []
         for row in rows:
@@ -364,10 +535,12 @@ class Window(QMainWindow):
             chart.addSeries(series)
             xaxis = QBarCategoryAxis()
             xaxis.append([name for name, _ in values])
+            xaxis.setLabelsBrush(QColor("#405471"))
             chart.addAxis(xaxis, Qt.AlignmentFlag.AlignBottom)
             series.attachAxis(xaxis)
             yaxis = QValueAxis()
             yaxis.setRange(0, max(1, max(value for _, value in values) * 1.1))
+            yaxis.setLabelsBrush(QColor("#405471"))
             chart.addAxis(yaxis, Qt.AlignmentFlag.AlignLeft)
             series.attachAxis(yaxis)
         else:
@@ -396,7 +569,18 @@ def main():
     window.show()
     if "--smoke-test" in sys.argv:
         window.show_rows([{ "product_name": "Smoke test", "sales_period": "100" }])
-        QTimer.singleShot(500, application.quit)
+        def verify_ui():
+            from PySide6.QtGui import QPalette
+            assert window.country.palette().color(QPalette.ColorRole.Text).lightness() < 100
+            assert window.navigation.count() == 5
+            for index in range(5):
+                window.navigation.setCurrentRow(index)
+                application.processEvents()
+                assert window.page_title.isVisible()
+                if "--capture-ui" in sys.argv:
+                    window.grab().save(f"ui-{index}.png")
+            application.quit()
+        QTimer.singleShot(500, verify_ui)
     code = application.exec()
     window.close()
     sys.exit(code)

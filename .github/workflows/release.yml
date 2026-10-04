@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Release tag (for example v0.1.0)
+        description: Release tag (for example v0.1.1)
         required: true
-        default: v0.1.0
+        default: v0.1.1
 permissions:
   contents: read
 concurrency:
@@ -43,7 +43,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $process = Start-Process dist/FastMossAuto.exe -ArgumentList "--smoke-test" -PassThru
+          $process = Start-Process dist/FastMossAuto.exe -ArgumentList "--smoke-test", "--capture-ui" -PassThru
           if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "EXE startup timed out" }
           if ($process.ExitCode -ne 0) { throw "EXE exited with $($process.ExitCode)" }
           New-Item -ItemType Directory -Force packages
@@ -56,7 +56,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name FastMossAuto --osx-bundle-identifier com.dstarking.fastmossauto main.py
           python - <<'PY'
           import subprocess
-          subprocess.run(['dist/FastMossAuto.app/Contents/MacOS/FastMossAuto', '--smoke-test'], check=True, timeout=60)
+          subprocess.run(['dist/FastMossAuto.app/Contents/MacOS/FastMossAuto', '--smoke-test', '--capture-ui'], check=True, timeout=60)
           PY
           codesign --verify --deep --strict dist/FastMossAuto.app
           mkdir -p packages
@@ -67,6 +67,13 @@ jobs:
           path: packages/*
           retention-days: 7
           if-no-files-found: error
+      - name: Upload rendered UI checks
+        uses: actions/upload-artifact@v4
+        with:
+          name: UI-${{ matrix.platform }}
+          path: ui-*.png
+          retention-days: 7
+          if-no-files-found: error
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -74,14 +81,22 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ inputs.version || 'v0.1.0' }}
+      VERSION: ${{ inputs.version || 'v0.1.1' }}
       GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          name: Windows-x64
           path: packages
-          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: macOS-x64
+          path: packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: macOS-arm64
+          path: packages
       - name: Create checksums and publish release
         run: |
           [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version'; exit 1; }
