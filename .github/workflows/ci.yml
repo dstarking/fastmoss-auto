@@ -1,15 +1,17 @@
-name: Test and Windows desktop build
+name: Windows and macOS tests
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     env:
       QT_QPA_PLATFORM: offscreen
@@ -18,29 +20,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install Qt system libraries
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
-  build-windows:
-    needs: test
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name FastMossAuto main.py
-      - name: Verify packaged application starts
-        shell: pwsh
-        run: |
-          $process = Start-Process dist/FastMossAuto/FastMossAuto.exe -ArgumentList "--smoke-test" -PassThru
-          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw "Packaged app did not exit" }
-          if ($process.ExitCode -ne 0) { throw "Packaged app exited with $($process.ExitCode)" }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: FastMossAuto-Windows
-          path: dist/FastMossAuto/
-          retention-days: 14

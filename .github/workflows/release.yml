@@ -1,0 +1,91 @@
+name: Build and publish Windows and macOS release
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release.yml']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag (for example v0.1.0)
+        required: true
+        default: v0.1.0
+permissions:
+  contents: read
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows-x64
+          - os: macos-15
+            platform: macOS-arm64
+          - os: macos-15-intel
+            platform: macOS-x64
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: Build Windows EXE
+        if: runner.os == 'Windows'
+        run: python -m PyInstaller --noconfirm --clean --windowed --onefile --name FastMossAuto main.py
+      - name: Check Windows EXE and stage asset
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process dist/FastMossAuto.exe -ArgumentList "--smoke-test" -PassThru
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw "EXE startup timed out" }
+          if ($process.ExitCode -ne 0) { throw "EXE exited with $($process.ExitCode)" }
+          New-Item -ItemType Directory -Force packages
+          Copy-Item dist/FastMossAuto.exe packages/FastMossAuto-Windows-x64.exe
+      - name: Build macOS app, check startup and archive
+        if: runner.os == 'macOS'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name FastMossAuto --osx-bundle-identifier com.dstarking.fastmossauto main.py
+          python - <<'PY'
+          import subprocess
+          subprocess.run(['dist/FastMossAuto.app/Contents/MacOS/FastMossAuto', '--smoke-test'], check=True, timeout=60)
+          PY
+          codesign --verify --deep --strict dist/FastMossAuto.app
+          mkdir -p packages
+          ditto -c -k --sequesterRsrc --keepParent dist/FastMossAuto.app "packages/FastMossAuto-${PLATFORM}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: packages/*
+          retention-days: 7
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version || 'v0.1.0' }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: Create checksums and publish release
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid version'; exit 1; }
+          cd packages
+          sha256sum FastMossAuto-* > SHA256SUMS.txt
+          cd ..
+          gh release create "$VERSION" packages/* --target "$GITHUB_SHA" --title "FastMoss Auto $VERSION" --notes-file RELEASE_NOTES.md

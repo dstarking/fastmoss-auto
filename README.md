@@ -1,6 +1,6 @@
 # FastMoss Auto
 
-Windows 桌面应用，面向 **TikTok Shop 跨境店**。默认新加坡和宠物用品，支持选择国家、组合筛选、采集结果表格、销量图、历史 JSON 导入，以及 **自选输出目录**。
+Windows / macOS 桌面应用，面向 **TikTok Shop 跨境店**。默认新加坡和宠物用品，支持选择国家、组合筛选、采集结果表格、销量图、历史 JSON 导入，以及 **自选输出目录**。
 
 技术栈：Python 3.13 / PySide6 / BrowserSkill / fastmoss-rpa-skills / pandas / QtCharts / PyInstaller。
 
@@ -68,17 +68,42 @@ py -3.13 -m venv .venv
 - `QProcess` 管理本应用启动的 `bsk daemon --foreground`，关闭应用会停止该进程，不停止外部已启动服务。
 - 浏览器登录和验证码由你手动处理，处理好后重新采集。
 
-## 打包成 EXE
+## 下载可直接运行的版本
 
-在 Windows 安装好项目依赖后：
+到 [GitHub Releases](https://github.com/dstarking/fastmoss-auto/releases/latest) 下载：
+
+| 系统 | 文件 | 使用方法 |
+| --- | --- | --- |
+| Windows 64 位 | FastMossAuto-Windows-x64.exe | 下载后双击运行 |
+| Mac Apple 芯片 | FastMossAuto-macOS-arm64.zip | 解压，运行 FastMossAuto.app |
+| Mac Intel | FastMossAuto-macOS-x64.zip | 解压，运行 FastMossAuto.app |
+
+程序已包含 Python 和界面依赖。首次使用仍需 BrowserSkill CLI、浏览器扩展、上游仓库目录和 FastMoss 登录态。Mac 从 Finder 启动时请在环境设置选择 `bsk` 的绝对路径，避免 PATH 与终端不同导致无法找到 CLI。
+
+Mac 包未做 Apple Developer ID 公证；系统阻止打开时可查看“系统设置 → 隐私与安全性”中的提示。Windows 包没有商业代码签名。
+
+## 自行打包
+
+Windows 安装好开发依赖后：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 ```
 
-运行 `dist/FastMossAuto/FastMossAuto.exe`，分享时需复制完整文件夹。EXE 仍需要本机 BrowserSkill、浏览器扩展、上游仓库路径和 FastMoss 登录态。
+生成 `dist/FastMossAuto.exe`（单文件）。
 
-仓库的 GitHub Actions 在 Python 3.13 的 Windows/Linux 上测试，然后生成 Windows 文件夹包。在 **Actions → Test and Windows desktop build → 对应运行 → Artifacts** 下载 `FastMossAuto-Windows`。可直接解压使用，仍需配置上述外部环境。若账号的 GitHub App 不允许创建 workflow，使用本地打包脚本。
+macOS 在项目目录执行：
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+bash scripts/build-macos.sh
+```
+
+生成 `dist/FastMossAuto.app` 和 ZIP。Apple 芯片与 Intel 需要分别在相应架构上打包。
+
+GitHub Actions Release 工作流自动测试三个平台、构建和校验启动，然后上传 GitHub Release。后续版本可手动运行该工作流并填写新的版本号。
 
 ## 开发与校验
 
@@ -88,7 +113,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 测试覆盖组合筛选、筛选失败、分页/末页、重复数据、国家不一致、取消清理、UTF-8 BOM、中文路径、唯一输出目录、导出失败清理、销量值解析、CLI 参数安全、Qt 界面及设置持久化。模拟浏览器测试不代表已通过真实 FastMoss 端到端验证。
 
-本次本地开发环境为 Linux/Python 3.12。Windows/Python 3.13 由仓库 CI 校验，构建结果以 Actions 状态为准。真实采集需要你自己的登录态、会员权限和 BrowserSkill 扩展。
+本次本地开发环境为 Linux/Python 3.12。Windows/macOS/Python 3.13 由仓库 CI 校验，构建结果以 Actions 状态为准。真实采集需要你自己的登录态、会员权限和 BrowserSkill 扩展。
 
 ## 代码结构
 
@@ -98,7 +123,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 - `collector.py`：组合筛选、选中状态检查、分页和取消。
 - `export.py`：CSV/JSON/Markdown 导出及数值解析。
 - `tests/`：核心测试和 Qt 离屏界面测试。
-- `scripts/`：Windows 启动、打包脚本。
+- `scripts/`：Windows 启动、Windows/macOS 打包脚本。
 
 ## 上游与依赖
 
