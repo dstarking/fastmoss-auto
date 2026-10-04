@@ -1,0 +1,36 @@
+name: Test and Windows desktop build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m PyInstaller --noconfirm --clean --windowed --onedir --name FastMossAuto --collect-all PySide6 --collect-all pandas main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FastMossAuto-Windows
+          path: dist/FastMossAuto/
+          retention-days: 14
