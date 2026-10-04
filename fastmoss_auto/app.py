@@ -19,6 +19,9 @@ from .bridge import Bridge
 from .collector import Collector
 from .domain import Job, Cancelled, COUNTRIES, default_output, load_sections
 from .export import export_run, numeric_sales
+from .category_picker import CategoryPicker
+from .category_reader import CategoryReader
+from .schema import canonical_country
 
 
 class Signals(QObject):
@@ -86,7 +89,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.4  ·  本地数据分析")
+        version = QLabel("v0.1.5  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)
@@ -116,8 +119,26 @@ class Window(QMainWindow):
         self.country.setCurrentText(self.settings.value("country", "新加坡"))
         self.section = QComboBox()
         self.section.addItem("商品 · 销量榜", "products")
-        self.category = QLineEdit(self.settings.value("category", "宠物用品"))
-        self.category.setPlaceholderText("必填；完整类目标签或路径，例如 宠物用品 / 宠物玩具")
+        self.category = CategoryPicker(self.settings.value("category", "宠物用品"))
+        try:
+            self.category_cache = json.loads(self.settings.value('category_cache', '{}'))
+            if not isinstance(self.category_cache, dict):
+                self.category_cache = {}
+        except (ValueError, TypeError):
+            self.category_cache = {}
+        category_row = QWidget()
+        category_layout = QVBoxLayout(category_row)
+        category_layout.setContentsMargins(0, 0, 0, 0)
+        category_layout.addWidget(self.category)
+        category_actions = QHBoxLayout()
+        self.read_categories_btn = QPushButton('读取类目')
+        self.read_categories_btn.clicked.connect(self.read_categories)
+        category_actions.addWidget(self.read_categories_btn)
+        self.category_status = QLabel()
+        self.category_status.setWordWrap(True)
+        category_actions.addWidget(self.category_status, 1)
+        category_layout.addLayout(category_actions)
+        self.load_category_cache()
         self.period = QComboBox()
         self.period.setEditable(True)
         self.period.addItems(["", "日榜", "周榜", "月榜"])
@@ -136,7 +157,7 @@ class Window(QMainWindow):
         form.addRow("平台 / 店铺类型", QLabel("TikTok Shop / 跨境店（固定）"))
         form.addRow("国家（必选）", self.country)
         form.addRow("采集榜单", self.section)
-        form.addRow("商品品类（必选）", self.category)
+        form.addRow("商品品类（必选）", category_row)
         form.addRow("周期（此榜单不支持）", self.period)
         form.addRow("最多采集页数", self.pages)
         form.addRow("页面等待", self.wait)
@@ -240,14 +261,60 @@ class Window(QMainWindow):
         self.pages.valueChanged.connect(self.save_settings)
         self.wait.valueChanged.connect(self.save_settings)
         self.section.currentIndexChanged.connect(self.sync_parameters)
+        self.country.currentTextChanged.connect(self.load_category_cache)
         self.sync_parameters()
         self.update_chart([])
 
     def sync_parameters(self, *_):
         products = self.section.currentData() == "products"
-        self.category.setEnabled(products)
+        self.category.setEnabled(products and not self.busy)
+        self.read_categories_btn.setEnabled(products and not self.busy)
         self.category.setToolTip("按层级选择类目，并逐条验证实际类目；店铺榜不传品类")
         self.period.setCurrentText("")
+
+    def load_category_cache(self, *_):
+        country = canonical_country(self.country.currentText()) or self.country.currentText().strip()
+        catalog = self.category_cache.get(country, {})
+        preferred = self.category.text() or self.category.preferred
+        paths = catalog.get('paths', []) if isinstance(catalog, dict) and catalog.get('schema_version') == 1 else []
+        self.category.set_paths(paths, preferred)
+        if self.category.paths:
+            roots = {path[0] for path in self.category.paths}
+            depth = max(map(len, self.category.paths))
+            self.category_status.setText(f'{country}缓存：{len(roots)} 个一级类目，已读取最深 {depth} 级；可停在父类。')
+        else:
+            self.category_status.setText('尚未读取当前国家的类目；请点击“读取类目”。')
+
+    def read_categories(self):
+        if self.busy:
+            return
+        country = self.country.currentText().strip()
+        source, bsk = self.source.text().strip(), self.bsk.text().strip()
+        preferred = self.category.text() or self.category.preferred or '宠物用品'
+        wait = self.wait.value()
+        try:
+            load_sections(source)
+            if not country or not bsk:
+                raise ValueError('请先选择国家并配置 bsk')
+            self.save_settings()
+        except Exception as exc:
+            self.on_error(str(exc))
+            return
+        def read(progress):
+            return CategoryReader().read(country, source, bsk, preferred, wait, self.cancel, progress)
+        self.run_work(read, self.categories_done)
+
+    def categories_done(self, catalog):
+        country = catalog['country']
+        self.category_cache[country] = catalog
+        self.settings.setValue('category_cache', json.dumps(self.category_cache, ensure_ascii=False))
+        self.settings.sync()
+        self.load_category_cache()
+        self.save_settings()
+        self.progress.setValue(100)
+        self.log.appendPlainText(f"已读取并缓存{country}的 {len(catalog['paths'])} 条真实类目路径。只选一级类目即可采集其子类。")
+        for warning in catalog.get('warnings', []):
+            self.log.appendPlainText(warning)
 
     def path_row(self, edit, title, directory):
         widget = QWidget()
@@ -282,6 +349,7 @@ class Window(QMainWindow):
         if self.busy:
             return
         self.busy = True
+        self.sync_parameters()
         self.cancel = Event()
         self.start_btn.setEnabled(False)
         self.check_btn.setEnabled(False)
@@ -306,6 +374,7 @@ class Window(QMainWindow):
 
     def finished(self):
         self.busy = False
+        self.sync_parameters()
         self.start_btn.setEnabled(True)
         self.check_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
@@ -315,6 +384,8 @@ class Window(QMainWindow):
     def start_collection(self):
         try:
             job = self.job()
+            if job.section == 'products' and not job.category:
+                raise ValueError('请先点击“读取类目”，并从下拉框选择一级类目；二级、三级可以不选')
             job.validate()
             load_sections(job.source)
             self.save_settings()
@@ -600,6 +671,21 @@ def main():
                 assert window.page_title.isVisible()
                 if "--capture-ui" in sys.argv:
                     window.grab().save(f"ui-{index}.png")
+            # Exercise packaged cascading widgets using explicit test-only fixtures.
+            window.navigation.setCurrentRow(1)
+            window.category.set_paths([['宠物用品'], ['宠物用品', '猫用品', '猫砂盆、猫厕所'],
+                                       ['宠物用品', '狗用品', '牵引绳']], '宠物用品')
+            window.category_status.setText('打包校验夹具（仅测试）：可停在父类，或继续选择下级。')
+            assert window.job().category == '宠物用品'
+            assert not any(combo.isEditable() for combo in window.category.combos)
+            application.processEvents()
+            if "--capture-ui" in sys.argv:
+                window.grab().save('ui-category-parent.png')
+            window.category.setText('宠物用品 / 猫用品 / 猫砂盆、猫厕所')
+            assert window.job().category == '宠物用品 / 猫用品 / 猫砂盆、猫厕所'
+            application.processEvents()
+            if "--capture-ui" in sys.argv:
+                window.grab().save('ui-category-leaf.png')
             application.quit()
         QTimer.singleShot(500, verify_ui)
     code = application.exec()

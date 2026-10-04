@@ -44,6 +44,7 @@ CATEGORY_TREE_JS = r"""
  }
  // Endpoint verified against upstream scripts/market_api.py. Read-only, same origin.
  let apiStatus = null;
+ let rootLabels = [];
  const controller = new AbortController();
  const timer = setTimeout(() => controller.abort(), 8000);
  try {
@@ -53,11 +54,13 @@ CATEGORY_TREE_JS = r"""
    apiStatus = response.status;
    if(response.ok) {
      const data = await response.json();
-     inspect(data.data || data);
+     const payload = data.data || data;
+     inspect(payload);
+     if(Array.isArray(payload.category)) rootLabels = clean(payload.category).map(n => n.c_name || n.category_name || n.label || n.name || n.title).filter(Boolean);
    }
  } catch(e) { apiStatus = 'unavailable'; }
  finally { clearTimeout(timer); }
- return JSON.stringify({trees, api_status:apiStatus});
+ return JSON.stringify({trees, root_labels:rootLabels, api_status:apiStatus});
 })(%s)
 """
 
