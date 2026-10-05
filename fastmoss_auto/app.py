@@ -89,7 +89,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.6  ·  本地数据分析")
+        version = QLabel("v0.1.7  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)
@@ -276,12 +276,12 @@ class Window(QMainWindow):
         country = canonical_country(self.country.currentText()) or self.country.currentText().strip()
         catalog = self.category_cache.get(country, {})
         preferred = self.category.text() or self.category.preferred
-        paths = catalog.get('paths', []) if isinstance(catalog, dict) and catalog.get('schema_version') == 1 else []
+        paths = catalog.get('paths', []) if isinstance(catalog, dict) and catalog.get('schema_version') == 2 else []
         self.category.set_paths(paths, preferred)
         if self.category.paths:
             roots = {path[0] for path in self.category.paths}
             depth = max(map(len, self.category.paths))
-            self.category_status.setText(f'{country}缓存：{len(roots)} 个一级类目，已读取最深 {depth} 级；可停在父类。')
+            self.category_status.setText(f'{country}中文类目：{len(roots)} 个一级类目，已一次读取到最深 {depth} 级；可停在父类。')
         else:
             self.category_status.setText('尚未读取当前国家的类目；请点击“读取类目”。')
 
@@ -312,7 +312,7 @@ class Window(QMainWindow):
         self.load_category_cache()
         self.save_settings()
         self.progress.setValue(100)
-        self.log.appendPlainText(f"已读取并缓存{country}的 {len(catalog['paths'])} 条真实类目路径。只选一级类目即可采集其子类。")
+        self.log.appendPlainText(f"已一次读取并缓存{country}的 {len(catalog['paths'])} 条中文类目路径（一级/二级/三级）。只选一级类目即可采集其子类。")
         for warning in catalog.get('warnings', []):
             self.log.appendPlainText(warning)
 

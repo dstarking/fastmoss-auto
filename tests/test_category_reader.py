@@ -24,6 +24,7 @@ def test_reader_real_paths_country_and_cleanup():
     assert ['宠物用品','猫用品','猫砂盆、猫厕所'] in result['paths']
     assert ['美妆'] in result['paths'] and not result['warnings']
     assert bridge.closed and result['source_url'].endswith('verified-sales-board')
+    assert result['schema_version'] == 2
     assert '新加坡' in ''.join(bridge.filters)
 
 
@@ -40,6 +41,36 @@ def test_children_do_not_become_false_roots():
     assert ['宠物用品','猫用品','猫砂盆、猫厕所'] in catalog_paths(data)
     data['root_labels'] = ['宠物用品']
     assert ['美妆'] not in catalog_paths(data)
+
+
+def test_localized_ui_catalog_wins_over_english_api_vocabulary():
+    data = {
+        'ui_paths': [['宠物用品'], ['宠物用品', '猫用品', '猫砂盆、猫厕所']],
+        'ui_trees': [],
+        'trees': [[{'label': 'Pet Supplies'}, {'label': 'Beauty'}]],
+        'root_labels': ['Pet Supplies', 'Beauty'],
+    }
+    assert catalog_paths(data) == [['宠物用品'], ['宠物用品', '猫用品', '猫砂盆、猫厕所']]
+
+
+def test_reader_crawls_every_localized_root_in_one_operation():
+    class CrawlingBridge(ReaderBridge):
+        def __init__(self):
+            super().__init__({'ui_paths': [['宠物用品'], ['美妆个护']],
+                              'ui_root_labels': ['宠物用品', '美妆个护'],
+                              'ui_trees': [], 'trees': [], 'root_labels': ['Pet Supplies', 'Beauty']})
+            self.roots = []
+        def evaluate(self, js):
+            if 'wantedRoot' in js:
+                root = '宠物用品' if '宠物用品' in js else '美妆个护'
+                self.roots.append(root)
+                return {'found': True, 'paths': [[root], [root, root + '二级'], [root, root + '二级', root + '三级']]}
+            return super().evaluate(js)
+    bridge = CrawlingBridge()
+    result = CategoryReader(bridge, SECTIONS).read('新加坡', '', 'bsk', cancel=ImmediateEvent())
+    assert bridge.roots == ['宠物用品', '美妆个护']
+    assert ['宠物用品', '宠物用品二级', '宠物用品三级'] in result['paths']
+    assert ['美妆个护', '美妆个护二级', '美妆个护三级'] in result['paths']
 
 
 @pytest.mark.parametrize('failure',['login','missing','unselected'])

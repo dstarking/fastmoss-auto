@@ -56,7 +56,7 @@ def test_country_cache_persists_and_is_isolated(tmp_path):
     configure(tmp_path)
     window = Window()
     window.navigation.setCurrentRow(1)
-    window.categories_done({'schema_version':1,'country':'新加坡','paths':PATHS,'warnings':[]})
+    window.categories_done({'schema_version':2,'country':'新加坡','paths':PATHS,'warnings':[]})
     assert window.job().category == '宠物用品'
     assert window.read_categories_btn.isEnabled()
     window.category.setText('宠物用品 / 猫用品 / 猫砂盆、猫厕所')
@@ -66,7 +66,7 @@ def test_country_cache_persists_and_is_isolated(tmp_path):
     assert restored.category.text() == '宠物用品 / 猫用品 / 猫砂盆、猫厕所'
     restored.country.setCurrentText('泰国')
     assert restored.category.text() == '' and not restored.category.paths
-    restored.categories_done({'schema_version':1,'country':'新加坡','paths':PATHS,'warnings':[]})
+    restored.categories_done({'schema_version':2,'country':'新加坡','paths':PATHS,'warnings':[]})
     assert restored.category.text() == ''  # a stale completion does not replace Thailand's selection
     restored.country.setCurrentText('新加坡')
     restored.category.setText('宠物用品')
@@ -87,7 +87,7 @@ def test_read_button_snapshots_configuration_and_uses_worker(tmp_path, monkeypat
     seen = {}
     def read(self,*args):
         seen['args'] = args
-        return {'schema_version':1,'country':'新加坡','paths':PATHS,'warnings':[]}
+        return {'schema_version':2,'country':'新加坡','paths':PATHS,'warnings':[]}
     monkeypatch.setattr('fastmoss_auto.app.CategoryReader.read',read)
     monkeypatch.setattr(window,'run_work',lambda fn,callback: callback(fn(lambda *args: None)))
     window.read_categories_btn.click()
