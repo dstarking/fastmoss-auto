@@ -58,6 +58,7 @@ def test_country_cache_persists_and_is_isolated(tmp_path):
     window.navigation.setCurrentRow(1)
     window.categories_done({'schema_version':2,'country':'新加坡','paths':PATHS,'warnings':[]})
     assert window.job().category == '宠物用品'
+    assert ('宠物用品', '猫用品', '猫砂盆、猫厕所') in window.job().category_catalog
     assert window.read_categories_btn.isEnabled()
     window.category.setText('宠物用品 / 猫用品 / 猫砂盆、猫厕所')
     window.save_settings()
@@ -66,6 +67,7 @@ def test_country_cache_persists_and_is_isolated(tmp_path):
     assert restored.category.text() == '宠物用品 / 猫用品 / 猫砂盆、猫厕所'
     restored.country.setCurrentText('泰国')
     assert restored.category.text() == '' and not restored.category.paths
+    assert restored.job().category_catalog == ()
     restored.categories_done({'schema_version':2,'country':'新加坡','paths':PATHS,'warnings':[]})
     assert restored.category.text() == ''  # a stale completion does not replace Thailand's selection
     restored.country.setCurrentText('新加坡')

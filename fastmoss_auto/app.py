@@ -89,7 +89,7 @@ class Window(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.addItems(["市场分析", "商品分析", "店铺分析", "达人分析", "设置"])
         side.addWidget(self.navigation)
-        version = QLabel("v0.1.7  ·  本地数据分析")
+        version = QLabel("v0.1.8  ·  本地数据分析")
         version.setObjectName("sidebarNote")
         side.addWidget(version)
         shell.addWidget(sidebar)
@@ -340,10 +340,17 @@ class Window(QMainWindow):
 
     def job(self):
         section, _, ranking = self.section.currentData().partition(":")
+        country = canonical_country(self.country.currentText()) or self.country.currentText().strip()
+        catalog = self.category_cache.get(country, {}) if section == "products" else {}
+        raw_paths = catalog.get('paths', []) if isinstance(catalog, dict) and catalog.get('schema_version') == 2 else []
+        category_catalog = tuple(tuple(part.strip() for part in path if isinstance(part, str) and part.strip())
+                                 for path in raw_paths if isinstance(path, (list, tuple)))
+        category_catalog = tuple(path for path in category_catalog if path)
         return Job(country=self.country.currentText().strip(), section=section, ranking=ranking or "sales",
                    category=self.category.text().strip() if section == "products" else "", period="",
                    pages=self.pages.value(), wait=self.wait.value(), output=self.output.text().strip(),
-                   source=self.source.text().strip(), bsk=self.bsk.text().strip())
+                   source=self.source.text().strip(), bsk=self.bsk.text().strip(),
+                   category_catalog=category_catalog)
 
     def run_work(self, fn, success):
         if self.busy:

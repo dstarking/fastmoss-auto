@@ -67,6 +67,28 @@ def test_collector_leaf_category_does_not_retry_when_hierarchy_proves_it(tmp_pat
     assert all(r['category_verification'] == 'source_hierarchy_and_page_filter' for r in rows)
 
 
+def test_collector_uses_country_category_cache_for_leaf_rows(tmp_path):
+    class CachedHierarchyBridge(FakeBridge):
+        def evaluate(self, js):
+            if 'root_labels:rootLabels' in js:
+                raise AssertionError('cached hierarchy should avoid rereading the collapsed page control')
+            return super().evaluate(js)
+    bridge = CachedHierarchyBridge()
+    job = Job(output=str(tmp_path), pages=1,
+              category_catalog=(('宠物用品', '猫用品', LEAF),))
+    rows, warnings = Collector(bridge, config()).collect(job, ImmediateEvent())
+    assert len(rows) == 1 and not warnings
+    assert rows[0]['category_path'] == f'宠物用品 / 猫用品 / {LEAF}'
+    assert rows[0]['category_verification'] == 'source_hierarchy_and_page_filter'
+
+
+def test_wrong_cached_parent_does_not_authorize_leaf(tmp_path):
+    job = Job(output=str(tmp_path), pages=1,
+              category_catalog=(('居家日用', '收纳', LEAF),))
+    with pytest.raises(RuntimeError, match='类目不一致'):
+        Collector(FakeBridge(), config()).collect(job, ImmediateEvent())
+
+
 def test_detail_fallback_preserves_board_and_cleans_session(tmp_path):
     class Detail(FakeBridge):
         starts = 0

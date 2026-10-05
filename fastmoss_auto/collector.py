@@ -85,6 +85,9 @@ class Collector:
         # Parent category choices may collapse after selecting a leaf; verify the leaf
         # control and the full path in every product row.
         checked_filters = [country_label, "跨境店"] + (category_labels[-1:] if job.category else [])
+        catalog_paths = [' / '.join(path) for path in job.category_catalog
+                         if isinstance(path, (list, tuple)) and path
+                         and all(isinstance(part, str) and part.strip() for part in path)]
 
         def wait():
             if cancel.wait(job.wait):
@@ -204,7 +207,12 @@ class Collector:
                             info = metadata[row_index] if row_index < len(metadata) else {}
                             actual_category = row.get('category', '')
                             paths = info.get('category_paths', [])
-                            resolved = resolve_category(job.category, actual_category, paths)
+                            # The category reader already collected the exact,
+                            # country-scoped Chinese hierarchy. Use that trusted
+                            # cache before trying to reconstruct a collapsed page
+                            # control or opening every product detail page.
+                            resolved = resolve_category(job.category, actual_category,
+                                                        [*paths, *catalog_paths])
                             if not resolved and actual_category:
                                 if category_trees is None:
                                     progress(int(index / job.pages * 90), '读取真实类目层级，核对末级类目归属')

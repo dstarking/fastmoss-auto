@@ -95,6 +95,7 @@ def test_export_unicode_and_unique_runs(job):
         assert list(csv.DictReader(f))[0]['product_name'] == '宠物猫玩具'
     data = json.loads((first / 'data.json').read_text(encoding='utf-8'))
     assert data['filters']['shop_type'] == '跨境店' and data['row_count'] == 1
+    assert 'category_catalog' not in data['filters']
     assert (first / 'report.md').exists() and 'source' not in data['filters']
 
 def test_failed_export_removed(job, monkeypatch):

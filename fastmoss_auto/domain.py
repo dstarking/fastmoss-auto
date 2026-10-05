@@ -22,6 +22,9 @@ class Job:
     output: str = ""
     source: str = ""
     bsk: str = "bsk"
+    # Country-scoped, page-derived category paths used only as verification
+    # evidence when a product row contains a leaf label instead of a full path.
+    category_catalog: tuple = ()
 
     def validate(self):
         if not self.country.strip():
@@ -48,7 +51,7 @@ class Job:
     def metadata(self):
         data = asdict(self)
         # Keep machine-local tool paths out of exported reports.
-        for key in ("source", "bsk", "output"):
+        for key in ("source", "bsk", "output", "category_catalog"):
             data.pop(key)
         return {"platform": "TikTok Shop", "shop_type": "跨境店", **data}
 
